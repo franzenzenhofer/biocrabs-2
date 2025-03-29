@@ -157,7 +157,23 @@ let globalTime=0;
 const Utils = {
   clamp(x,lo,hi){ return Math.max(lo, Math.min(hi,x)); },
   rand(min=0,max=1){ return Math.random()*(max-min)+min; },
-  crossover(a,b){ return a.map((val,i)=>(Math.random()<0.5? val : b[i])); },
+  crossover(a,b){ 
+    // Create a new array for the child's genes
+    let child = [];
+    
+    // For each gene, randomly choose between parent A and parent B
+    for (let i = 0; i < a.length; i++) {
+      child[i] = Math.random() < 0.5 ? a[i] : b[i];
+    }
+    
+    // Ensure RGB color genes are treated as completely independent traits
+    // Each RGB component has an independent 50% chance from each parent
+    child[this.GENE.COLOR_R] = Math.random() < 0.5 ? a[this.GENE.COLOR_R] : b[this.GENE.COLOR_R];
+    child[this.GENE.COLOR_G] = Math.random() < 0.5 ? a[this.GENE.COLOR_G] : b[this.GENE.COLOR_G];
+    child[this.GENE.COLOR_B] = Math.random() < 0.5 ? a[this.GENE.COLOR_B] : b[this.GENE.COLOR_B];
+    
+    return child;
+  },
 
   getPolyVerts(n, r, elong, orient){
     let arr=[];
@@ -311,13 +327,23 @@ function createRandomGenotype(){
   return g;
 }
 
-function mutate(g){
-  const LC= CONFIG.LIMB_COUNT;
-  for(let i=0;i<g.length;i++){
-    if(Math.random()< CONFIG.MUTATION_RATE){
-      g[i]*= (1+ Utils.rand(-0.2,0.2));
+function mutate(g, mutationRate=CONFIG.MUTATION_RATE){
+  const LC = CONFIG.LIMB_COUNT;
+  
+  // Apply mutation with the specified rate
+  for(let i=0; i<g.length; i++){
+    if(Math.random() < mutationRate){
+      // Apply mutation - more variance for color genes to encourage diversity
+      if (i === Utils.GENE.COLOR_R || i === Utils.GENE.COLOR_G || i === Utils.GENE.COLOR_B) {
+        // Colors can change more dramatically
+        g[i] += Utils.rand(-50, 50);
+      } else {
+        // Other genes have proportional changes
+        g[i] *= (1 + Utils.rand(-0.2, 0.2));
+      }
     }
   }
+  
   // Clamp gene values to maintain valid ranges
   g[Utils.GENE.SIDES] = Utils.clamp(Math.round(g[Utils.GENE.SIDES]), 3, 8);
   g[Utils.GENE.BODY_SYM] = Utils.clamp(g[Utils.GENE.BODY_SYM], 0, 1);
@@ -339,11 +365,11 @@ function mutate(g){
   g[Utils.GENE.AMP] = Math.max(g[Utils.GENE.AMP], 0.5);
 
   // Fix limb genes
-  for(let i=0;i<LC;i++){
-    let base= 3+ i*5;
-    g[base+1]= Math.max(g[base+1],1);
-    g[base+2]= Utils.clamp(g[base+2],0.05,1);
-    g[base+3]= Utils.clamp(g[base+3],0.1,0.95);
+  for(let i=0; i<LC; i++){
+    let base = 3 + i*5;
+    g[base+1] = Math.max(g[base+1], 1);
+    g[base+2] = Utils.clamp(g[base+2], 0.05, 1);
+    g[base+3] = Utils.clamp(g[base+3], 0.1, 0.95);
   }
 }
 
@@ -427,25 +453,83 @@ function initPopulation(){
 }
 
 function breedNextGeneration(){
-  let chosen= population.filter(c=> c.selected);
-  if(chosen.length<2) return;
-  let newPop=[];
-  for(let i=0;i< CONFIG.POP_SIZE;i++){
-    let p1= chosen[Math.floor(Math.random()*chosen.length)].genotype;
-    let p2= chosen[Math.floor(Math.random()*chosen.length)].genotype;
-    let child= Utils.crossover(p1,p2);
-    mutate(child);
+  let chosen = population.filter(c => c.selected);
+  if(chosen.length < 2) return;
+  
+  // Calculate approximate relative fitness based on traits
+  chosen.forEach(crab => {
+    // Basic fitness calculation - can be adjusted based on desired traits
+    const dragFitness = 1.2 - Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD); // Lower drag is better
+    const torqueFitness = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF); // Higher torque efficiency is better
+    const powerFitness = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO); // Higher power ratio is better
+    
+    // Combined fitness score - weighted average
+    crab._fitness = (dragFitness + torqueFitness * 1.2 + powerFitness) / 3.2;
+  });
+  
+  // Sort by fitness (optional - for weighted selection)
+  chosen.sort((a, b) => b._fitness - a._fitness);
+  
+  // Create the new population with improved breeding strategy
+  let newPop = [];
+  
+  // Elitism: Keep the best parents (optional - preserves good traits)
+  const eliteCount = Math.min(2, chosen.length);
+  for (let i = 0; i < eliteCount; i++) {
+    // Clone the elite individuals but don't select them
     newPop.push({
-      genotype: child,
-      x: Math.random()*W,
-      y: Math.random()*H,
-      vx:0, vy:0,
-      orientation: Math.random()*2*Math.PI,
-      omega:0,
-      selected:false
+      genotype: [...chosen[i].genotype],
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: 0, vy: 0,
+      orientation: Math.random() * 2 * Math.PI,
+      omega: 0,
+      selected: false
     });
   }
-  population= newPop;
+  
+  // Fill the rest with children using improved parent selection
+  while (newPop.length < CONFIG.POP_SIZE) {
+    // Tournament selection: select parents based on random sampling and fitness
+    let parent1, parent2;
+    
+    // Tournament for first parent
+    const tournamentSize = Math.min(3, chosen.length);
+    let candidates = [];
+    for (let i = 0; i < tournamentSize; i++) {
+      candidates.push(chosen[Math.floor(Math.random() * chosen.length)]);
+    }
+    candidates.sort((a, b) => b._fitness - a._fitness); 
+    parent1 = candidates[0].genotype;
+    
+    // Tournament for second parent (ensuring different from first)
+    candidates = [];
+    for (let i = 0; i < tournamentSize; i++) {
+      candidates.push(chosen[Math.floor(Math.random() * chosen.length)]);
+    }
+    candidates.sort((a, b) => b._fitness - a._fitness);
+    parent2 = candidates[0].genotype;
+    
+    // Crossover and mutation
+    let child = Utils.crossover(parent1, parent2);
+    
+    // Variable mutation rate - more diverse mutations for experimental traits
+    const baseMutationRate = CONFIG.MUTATION_RATE;
+    mutate(child, baseMutationRate);
+    
+    // Add the child to the new population
+    newPop.push({
+      genotype: child,
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: 0, vy: 0,
+      orientation: Math.random() * 2 * Math.PI,
+      omega: 0,
+      selected: false
+    });
+  }
+  
+  population = newPop;
   updateBreedButton();
 }
 
@@ -1259,22 +1343,6 @@ function drawCrab(ctx, g, t, crabX, crabY) {
       let disturbIntensity = Math.min(0.2, 0.05 + Math.abs(swing) * 0.15 * powerRatio);
       ctx.shadowColor = `rgba(255, 255, 255, ${disturbIntensity})`;
       ctx.shadowBlur = 4;
-      
-      // Add small bubbles near rapidly moving limbs
-      if (Math.abs(swing) > 0.5 && Math.random() < 0.3 * powerRatio) {
-        const bubbleCount = Math.floor(Math.random() * 3) + 1;
-        
-        for (let b = 0; b < bubbleCount; b++) {
-          const bubbleX = bLen * 0.7 * Math.random();
-          const bubbleY = bLen * 0.2 * (Math.random() - 0.5);
-          const bubbleSize = 1 + Math.random() * 2;
-          
-          ctx.beginPath();
-          ctx.arc(bubbleX, bubbleY, bubbleSize, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 255, 255, ${0.2 + 0.3 * Math.random()})`;
-          ctx.fill();
-        }
-      }
     }
     
     // Draw enhanced limbs with genetics information
@@ -1282,36 +1350,7 @@ function drawCrab(ctx, g, t, crabX, crabY) {
     ctx.restore();
   }
   
-  // Draw enhanced water ripples around limbs during power stroke
-  if (Math.abs(Math.sin(freq * t)) > 0.6) {
-    let rippleCount = Math.ceil(powerRatio * 3);
-    
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    
-    for (let i = 0; i < rippleCount; i++) {
-      let rippleSize = 4 + Math.random() * 3 * powerRatio;
-      let rippleX = (Math.random() - 0.5) * rad * 2.2;
-      let rippleY = (Math.random() - 0.5) * rad * 2.2;
-      
-      // Create gradient for more attractive ripples
-      const rippleGradient = ctx.createRadialGradient(
-        rippleX, rippleY, 0,
-        rippleX, rippleY, rippleSize
-      );
-      
-      rippleGradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
-      rippleGradient.addColorStop(0.5, 'rgba(200, 220, 255, 0.15)');
-      rippleGradient.addColorStop(1, 'rgba(150, 180, 255, 0)');
-      
-      ctx.beginPath();
-      ctx.arc(rippleX, rippleY, rippleSize, 0, Math.PI * 2);
-      ctx.fillStyle = rippleGradient;
-      ctx.fill();
-    }
-    
-    ctx.restore();
-  }
+  // Water ripples removed
   
   // Draw enhanced energy dots
   drawEnergyDots(ctx, energy, rad, color);
