@@ -528,24 +528,51 @@ function applyLimbForces(crab){
   }
 }
 
-/** Quadratic drag + rotational drag. */
+/** Enhanced quadratic drag + directional + rotational drag. */
 function applyQuadraticDrag(crab){
   // Get genetic drag modifiers
   let dragMod = Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD);
   let rotDragMod = Utils.getGene(crab.genotype, Utils.GENE.ROT_DRAG_MOD);
   
-  // Apply personalized drag coefficient
-  let vx= crab.vx, vy= crab.vy;
-  let s2= vx*vx+ vy*vy;
-  if(s2>0){
-    let s= Math.sqrt(s2);
-    let dragMag= CONFIG.DRAG_COEFF * dragMod * s2;
-    crab._fx+= -dragMag*(vx/s);
-    crab._fy+= -dragMag*(vy/s);
+  // Get crab's current velocity
+  let vx = crab.vx, vy = crab.vy;
+  let s2 = vx*vx + vy*vy;
+  
+  if(s2 > 0){
+    let s = Math.sqrt(s2);
+    
+    // Base drag force - quadratic with speed
+    let baseDragMag = CONFIG.DRAG_COEFF * dragMod * s2;
+    
+    // Get orientation for directional drag
+    let crabAngle = crab.orientation;
+    let moveAngle = Math.atan2(vy, vx);
+    
+    // Calculate angle difference between movement and orientation
+    let angleDiff = Math.abs((moveAngle - crabAngle + Math.PI) % (2 * Math.PI) - Math.PI);
+    
+    // Apply more drag when moving sideways (higher angle difference)
+    // and less drag when moving forward or backward (lower angle difference)
+    let directionFactor = 0.8 + 0.4 * (angleDiff / Math.PI); // 0.8-1.2 range
+    
+    // Calculate final drag magnitude
+    let dragMag = baseDragMag * directionFactor;
+    
+    // Apply drag force
+    crab._fx += -dragMag * (vx/s);
+    crab._fy += -dragMag * (vy/s);
+    
+    // Add slight torque to help align with movement at high speeds
+    if (s > 5 && angleDiff > 0.5) {
+      let alignmentTorque = 0.02 * Math.sin(moveAngle - crabAngle) * s * dragMod;
+      crab._torque += alignmentTorque;
+    }
   }
   
-  // Apply personalized rotational drag
-  crab._torque+= -CONFIG.ROT_DRAG * rotDragMod * crab.omega;
+  // Enhanced rotational drag that increases with higher rotation speeds
+  let omegaSq = crab.omega * crab.omega;
+  let rotDrag = CONFIG.ROT_DRAG * rotDragMod * (1 + 0.1 * omegaSq);
+  crab._torque += -rotDrag * crab.omega;
 }
 
 /** Apply a gentle gravitational force toward center */
@@ -881,9 +908,9 @@ function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
     ctx.strokeStyle = `rgba(30, 40, 50, ${alpha})`;
     ctx.stroke();
     
-    // Add small refined joint at the end
+    // Add tiny joint circle at the end
     ctx.beginPath();
-    ctx.arc(length, 0, Math.max(0.8, length * 0.07), 0, Math.PI * 2);
+    ctx.arc(length, 0, Math.max(0.3, length * 0.03), 0, Math.PI * 2);
     ctx.fillStyle = `rgba(40, 50, 60, ${alpha})`;
     ctx.fill();
     
@@ -913,46 +940,16 @@ function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
   ctx.strokeStyle = limbGradient;
   ctx.stroke();
   
-  // Add a refined, smaller joint sphere at the branch point
-  // Smaller size coefficient (0.08 instead of 0.12)
-  const jointSize = Math.max(1.2, length * 0.08 * (dragMod || 1));
-  
-  // Create joint with gradient for better appearance
-  const jointGradient = ctx.createRadialGradient(
-    length, 0, 0,
-    length, 0, jointSize
-  );
-  
-  // Joint color based on power ratio with more refined palette
-  const jointR = 40 + (powerRatio ? Math.min(25, powerRatio * 15) : 0);
-  const jointG = 50 + (powerRatio ? Math.min(15, powerRatio * 12) : 0);
-  const jointB = 60 + (powerRatio ? Math.min(10, powerRatio * 5) : 0);
-  
-  jointGradient.addColorStop(0, `rgba(${jointR + 15}, ${jointG + 10}, ${jointB + 5}, 0.9)`);
-  jointGradient.addColorStop(0.7, `rgba(${jointR}, ${jointG}, ${jointB}, 0.9)`);
-  jointGradient.addColorStop(1, `rgba(${Math.max(0, jointR - 10)}, ${Math.max(0, jointG - 10)}, ${Math.max(0, jointB - 5)}, 0.8)`);
-  
-  // Draw the joint with gradient
+  // Add a tiny joint sphere at the branch point
   ctx.beginPath();
+  const jointSize = Math.max(0.5, length * 0.04 * (dragMod || 1));
   ctx.arc(length, 0, jointSize, 0, Math.PI * 2);
-  ctx.fillStyle = jointGradient;
+  
+  // Joint color based on power ratio
+  const jointR = 40 + (powerRatio ? Math.min(30, powerRatio * 20) : 0);
+  const jointG = 50 + (powerRatio ? Math.min(20, powerRatio * 15) : 0);
+  ctx.fillStyle = `rgb(${jointR}, ${jointG}, 60)`;
   ctx.fill();
-  
-  // Add subtle highlight to create sense of dimension
-  const highlightSize = jointSize * 0.4;
-  const highlightOffset = jointSize * 0.2;
-  
-  ctx.beginPath();
-  ctx.arc(length - highlightOffset, -highlightOffset, highlightSize, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(255, 255, 255, 0.25)`;
-  ctx.fill();
-  
-  // Add very subtle outline for definition
-  ctx.beginPath();
-  ctx.arc(length, 0, jointSize, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(20, 25, 30, 0.3)`;
-  ctx.lineWidth = 0.5;
-  ctx.stroke();
   
   ctx.translate(length, 0);
   
@@ -1665,7 +1662,7 @@ function drawNebulaBackground() {
     const xPos = W * ((i / floatingParticleCount) + 0.2 * Math.sin(globalTime * 0.02 + i));
     const yPos = H * ((i % 5) / 5 + 0.1 * Math.cos(globalTime * 0.03 + i * 2));
     
-    // Size varies with position - ensure it's always positive
+    // Size varies with position
     const size = Math.max(0.5, 1.5 + Math.sin(xPos * 0.01) + Math.cos(yPos * 0.01));
     
     ctx.beginPath();
