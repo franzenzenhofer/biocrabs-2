@@ -141,7 +141,14 @@ const CONFIG = {
   GRAVITY_STRENGTH: 0.1,
   GRAVITY_RADIUS: 35,
   GRAVITY_VISUAL_PULSE: 0.3,
-  GRAVITY_FALLOFF: 250
+  GRAVITY_FALLOFF: 250,
+  
+  // Water spider movement parameters
+  SURFACE_TENSION: 0.7,     // How much the surface tension affects movement
+  SKITTER_FACTOR: 0.25,     // Irregular, jerky movement factor
+  RIPPLE_EFFECT: 0.15,      // How much ripples affect movement
+  PULSE_INTERVAL: 5.0,      // Time between major movement pulses
+  WATER_RESISTANCE: 1.2     // Resistance when moving on water surface
 };
 
 /***********************************************************************
@@ -572,7 +579,25 @@ function applyLimbForces(crab){
   // Get genetic power ratio and torque efficiency
   let powerRatio = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO);
   let torqueEfficiency = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
-
+  
+  // Water spider movement: periodic pulse pattern
+  // Adds a major pulse of movement at regular intervals
+  const pulsePhase = (globalTime % CONFIG.PULSE_INTERVAL) / CONFIG.PULSE_INTERVAL;
+  const pulseFactor = Math.pow(Math.sin(pulsePhase * Math.PI), 2);
+  
+  // Calculate current speed for skittering effect
+  const currentSpeed = Math.sqrt(crab.vx * crab.vx + crab.vy * crab.vy);
+  
+  // Water spiders tend to move in short bursts followed by pauses
+  // Apply skittering effect - periodic starting and stopping
+  const skitterOffset = rad * 0.1; // Unique skitter pattern based on crab size
+  const skitterPhase = Math.sin(globalTime * 3 + skitterOffset) * CONFIG.SKITTER_FACTOR;
+  
+  // Surface tension effect - makes movement more pronounced when moving slow
+  // (water spiders need to overcome surface tension to start moving)
+  const surfaceTensionFactor = CONFIG.SURFACE_TENSION / (1 + currentSpeed * 0.5);
+  
+  // Apply these factors across all limbs
   for(let i=0;i<LC;i++){
     let base= 3+ i*5;
     let bAng= crab.genotype[base+0];
@@ -583,11 +608,28 @@ function applyLimbForces(crab){
     let cycMod= cyc % (2*Math.PI);
     let inPower= (cycMod>=0 && cycMod<Math.PI);
 
-    let rawSine= amp* Math.sin(cycMod);
+    // More asymmetric motion for water spider movement
+    // Add skittering effect to the sine wave
+    let rawSine= amp* Math.sin(cycMod + skitterPhase);
     
-    // Apply genetic power ratio for a personalized swimming style
-    let powerFactor = inPower ? CONFIG.POWER_FACTOR * powerRatio : CONFIG.RECOVERY_FACTOR;
+    // Apply genetic power ratio + surface tension effects
+    let powerFactor = inPower ? 
+      CONFIG.POWER_FACTOR * powerRatio * (1 + surfaceTensionFactor) : 
+      CONFIG.RECOVERY_FACTOR;
+    
+    // Apply periodic pulse for water spider's jumping effect
+    if (inPower) {
+      powerFactor *= (1 + pulseFactor * 0.8);
+    }
+    
+    // Limb force with water spider physics
     let thrust= powerFactor * Math.abs(rawSine) * (limbLen/40);
+    
+    // Create ripple effect - stronger push when dipping into water
+    const rippleEffect = Math.abs(Math.sin(cycMod * 0.5)) * CONFIG.RIPPLE_EFFECT;
+    if (inPower && Math.sin(cycMod) > 0.7) {
+      thrust *= (1 + rippleEffect);
+    }
 
     let dir= crab.orientation+ bAng + Math.PI;
     let fx= thrust* Math.cos(dir);
@@ -596,16 +638,20 @@ function applyLimbForces(crab){
     crab._fx+= fx; 
     crab._fy+= fy;
 
-    // Enhanced torque calculation
-    // Use full radius rather than half radius for more pronounced rotation
+    // Enhanced torque calculation with water spider movement effects
+    // Water spiders often turn with distinct jerky rotations
     let offR= rad * (0.6 + 0.4 * Math.abs(Math.sin(bAng))); // Variable radius based on limb angle
     let offX= offR* Math.cos(crab.orientation+ bAng);
     let offY= offR* Math.sin(crab.orientation+ bAng);
     
     // Apply a directional bias to torque based on limb position
     let torqueContribution = (offX* fy - offY* fx);
-    // Add a small phase-dependent component for rhythmic rotation
-    let phaseEffect = 0.05 * Math.sin(cycMod + bAng) * thrust;
+    
+    // Add skittering effect to rotation
+    const rotationSkitter = 0.1 * Math.sin(globalTime * 2 + i) * CONFIG.SKITTER_FACTOR;
+    
+    // Add water spider's characteristic turn pattern
+    let phaseEffect = (0.05 + rotationSkitter) * Math.sin(cycMod + bAng) * thrust;
     
     // Apply genetic torque efficiency
     crab._torque += (torqueContribution + phaseEffect) * torqueEfficiency;
@@ -625,8 +671,12 @@ function applyQuadraticDrag(crab){
   if(s2 > 0){
     let s = Math.sqrt(s2);
     
+    // Water surface resistance - stronger when moving slowly (due to surface tension)
+    // Water spiders experience more resistance when starting to move
+    const waterResistanceFactor = CONFIG.WATER_RESISTANCE * (1.5 / (1 + s));
+    
     // Base drag force - quadratic with speed
-    let baseDragMag = CONFIG.DRAG_COEFF * dragMod * s2;
+    let baseDragMag = CONFIG.DRAG_COEFF * dragMod * s2 * waterResistanceFactor;
     
     // Get orientation for directional drag
     let crabAngle = crab.orientation;
@@ -635,9 +685,9 @@ function applyQuadraticDrag(crab){
     // Calculate angle difference between movement and orientation
     let angleDiff = Math.abs((moveAngle - crabAngle + Math.PI) % (2 * Math.PI) - Math.PI);
     
-    // Apply more drag when moving sideways (higher angle difference)
-    // and less drag when moving forward or backward (lower angle difference)
-    let directionFactor = 0.8 + 0.4 * (angleDiff / Math.PI); // 0.8-1.2 range
+    // Water spiders move more efficiently in certain directions
+    // They have more drag when moving sideways compared to forward/backward
+    let directionFactor = 0.7 + 0.6 * (angleDiff / Math.PI); // 0.7-1.3 range (more extreme)
     
     // Calculate final drag magnitude
     let dragMag = baseDragMag * directionFactor;
@@ -646,16 +696,26 @@ function applyQuadraticDrag(crab){
     crab._fx += -dragMag * (vx/s);
     crab._fy += -dragMag * (vy/s);
     
-    // Add slight torque to help align with movement at high speeds
-    if (s > 5 && angleDiff > 0.5) {
-      let alignmentTorque = 0.02 * Math.sin(moveAngle - crabAngle) * s * dragMod;
+    // Water spiders tend to align with movement direction at high speeds
+    if (s > 3 && angleDiff > 0.3) {
+      let alignmentTorque = 0.03 * Math.sin(moveAngle - crabAngle) * s * dragMod;
       crab._torque += alignmentTorque;
+    }
+    
+    // Add water surface skittering effect - slight jitter in movement
+    // This creates the characteristic "skating" motion on water surface
+    if (s < 5) {
+      const skitterFreq = 3.0 + s;
+      const skitterMag = 0.02 * (5 - s) / 5;
+      crab._fx += skitterMag * Math.sin(globalTime * skitterFreq) * s;
+      crab._fy += skitterMag * Math.cos(globalTime * skitterFreq + 0.4) * s;
     }
   }
   
-  // Enhanced rotational drag that increases with higher rotation speeds
+  // Enhanced rotational drag with water surface effects
+  // Water spiders have more damped rotation due to surface tension
   let omegaSq = crab.omega * crab.omega;
-  let rotDrag = CONFIG.ROT_DRAG * rotDragMod * (1 + 0.1 * omegaSq);
+  let rotDrag = CONFIG.ROT_DRAG * rotDragMod * (1 + 0.15 * omegaSq);
   crab._torque += -rotDrag * crab.omega;
 }
 
@@ -950,20 +1010,67 @@ function integrateCrab(crab){
 
 /** partial-elastic bounce from walls, no torque from walls for simplicity. */
 function handleWallCollision(crab){
-  let e= CONFIG.RESTITUTION;
-  if(crab.x<0){
-    crab.x=0;
-    if(crab.vx<0) crab.vx= - e* crab.vx;
-  } else if(crab.x>W){
-    crab.x= W;
-    if(crab.vx>0) crab.vx= - e* crab.vx;
+  let e = CONFIG.RESTITUTION;
+  // Get elasticity from crab's genes
+  let elasticity = Utils.getGene(crab.genotype, Utils.GENE.ELASTICITY);
+  
+  // Water spiders tend to stay at the edges of water surfaces
+  // They experience less rebound when hitting walls (more like sticking)
+  const waterEdgeEffect = 0.7; // Reduces bounce at edges
+  e *= waterEdgeEffect * elasticity;
+  
+  // Wall collision handling with water spider characteristics
+  if(crab.x < 0){
+    crab.x = 0;
+    if(crab.vx < 0) {
+      // Add slight upward/downward deflection like water spiders on edges
+      const deflection = Utils.rand(-0.2, 0.2) * Math.abs(crab.vx);
+      crab.vy += deflection;
+      crab.vx = -e * crab.vx;
+    }
+  } else if(crab.x > W){
+    crab.x = W;
+    if(crab.vx > 0) {
+      const deflection = Utils.rand(-0.2, 0.2) * Math.abs(crab.vx);
+      crab.vy += deflection;
+      crab.vx = -e * crab.vx;
+    }
   }
-  if(crab.y<0){
-    crab.y=0;
-    if(crab.vy<0) crab.vy= - e* crab.vy;
-  } else if(crab.y>H){
-    crab.y= H;
-    if(crab.vy>0) crab.vy= - e* crab.vy;
+  if(crab.y < 0){
+    crab.y = 0;
+    if(crab.vy < 0) {
+      const deflection = Utils.rand(-0.2, 0.2) * Math.abs(crab.vy);
+      crab.vx += deflection;
+      crab.vy = -e * crab.vy;
+    }
+  } else if(crab.y > H){
+    crab.y = H;
+    if(crab.vy > 0) {
+      const deflection = Utils.rand(-0.2, 0.2) * Math.abs(crab.vy);
+      crab.vx += deflection;
+      crab.vy = -e * crab.vy;
+    }
+  }
+  
+  // Water spiders often change direction after hitting walls
+  // Add slight rotation when hitting edges
+  if(crab.x <= 0 || crab.x >= W || crab.y <= 0 || crab.y >= H) {
+    // Add a small random spin when hitting walls
+    crab.omega += Utils.rand(-0.2, 0.2);
+    
+    // Create small ripple effect at wall contact point
+    const intensity = Math.min(Math.sqrt(crab.vx*crab.vx + crab.vy*crab.vy) * 0.2, 0.5);
+    if(intensity > 0.1) {
+      let contactX = crab.x;
+      let contactY = crab.y;
+      // Adjust contact point to be exactly on the wall
+      if(crab.x <= 0) contactX = 0;
+      if(crab.x >= W) contactX = W;
+      if(crab.y <= 0) contactY = 0;
+      if(crab.y >= H) contactY = H;
+      
+      createCollisionEffect(contactX, contactY, intensity, elasticity);
+    }
   }
 }
 
