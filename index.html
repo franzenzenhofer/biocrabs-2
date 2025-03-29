@@ -24,13 +24,13 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background-image: 
+      background-image:
         radial-gradient(rgba(255,255,255,.12), rgba(255,255,255,.05) 2px, transparent 4px),
         radial-gradient(rgba(255,255,255,.08), rgba(255,255,255,.03) 1px, transparent 3px);
-      background-size: 
+      background-size:
         180px 180px,
         120px 120px;
-      background-position: 
+      background-position:
         0 0,
         20px 20px;
       pointer-events: none;
@@ -51,7 +51,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: 
+      background:
         linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.03) 50%, rgba(255,255,255,0) 100%);
       pointer-events: none;
       animation: waterGlow 8s infinite ease-in-out;
@@ -106,6 +106,66 @@
 "use strict";
 
 /***********************************************************************
+ * 1) EXTRACT REPETITIVE LOGIC INTO FUNCTIONS (DRY Strategy)
+ ***********************************************************************/
+
+/** 
+ * Helper: Start a polygon path from a set of vertices 
+ * and close it automatically.
+ */
+function beginPolygonPath(ctx, vertices) {
+  ctx.beginPath();
+  ctx.moveTo(vertices[0].x, vertices[0].y);
+  for (let i = 1; i < vertices.length; i++) {
+    ctx.lineTo(vertices[i].x, vertices[i].y);
+  }
+  ctx.closePath();
+}
+
+/**
+ * Helper: Create a radial gradient with an array of color stops.
+ * Each stop: { offset: number, color: string }
+ */
+function createRadialGradient(ctx, x, y, innerR, outerR, stops) {
+  const grad = ctx.createRadialGradient(x, y, innerR, x, y, outerR);
+  stops.forEach(stop => {
+    grad.addColorStop(stop.offset, stop.color);
+  });
+  return grad;
+}
+
+/**
+ * Helper: Fill an arc with a specified gradient.
+ * This avoids repeating the same beginPath/arc/fill pattern.
+ */
+function fillArcWithGradient(ctx, x, y, radius, gradient) {
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+}
+
+/**
+ * Helper: Fill a polygon from the given vertices using a fillStyle.
+ */
+function fillPolygon(ctx, vertices, fillStyle) {
+  beginPolygonPath(ctx, vertices);
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
+/**
+ * Helper: Stroke a polygon from the given vertices using a strokeStyle/lineWidth.
+ */
+function strokePolygon(ctx, vertices, strokeStyle, lineWidth = 1) {
+  beginPolygonPath(ctx, vertices);
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = strokeStyle;
+  ctx.stroke();
+}
+
+
+/***********************************************************************
  * CONFIG - JIRA TICKET CHANGES
  ***********************************************************************/
 const CONFIG = {
@@ -144,11 +204,11 @@ const CONFIG = {
   GRAVITY_FALLOFF: 250,
   
   // Water spider movement parameters
-  SURFACE_TENSION: 0.7,     // How much the surface tension affects movement
-  SKITTER_FACTOR: 0.25,     // Irregular, jerky movement factor
-  RIPPLE_EFFECT: 0.15,      // How much ripples affect movement
-  PULSE_INTERVAL: 5.0,      // Time between major movement pulses
-  WATER_RESISTANCE: 1.2     // Resistance when moving on water surface
+  SURFACE_TENSION: 0.7,
+  SKITTER_FACTOR: 0.25,
+  RIPPLE_EFFECT: 0.15,
+  PULSE_INTERVAL: 5.0,
+  WATER_RESISTANCE: 1.2
 };
 
 /***********************************************************************
@@ -165,20 +225,14 @@ const Utils = {
   clamp(x,lo,hi){ return Math.max(lo, Math.min(hi,x)); },
   rand(min=0,max=1){ return Math.random()*(max-min)+min; },
   crossover(a,b){ 
-    // Create a new array for the child's genes
     let child = [];
-    
-    // For each gene, randomly choose between parent A and parent B
     for (let i = 0; i < a.length; i++) {
       child[i] = Math.random() < 0.5 ? a[i] : b[i];
     }
-    
-    // Ensure RGB color genes are treated as completely independent traits
-    // Each RGB component has an independent 50% chance from each parent
+    // Handle color genes separately
     child[this.GENE.COLOR_R] = Math.random() < 0.5 ? a[this.GENE.COLOR_R] : b[this.GENE.COLOR_R];
     child[this.GENE.COLOR_G] = Math.random() < 0.5 ? a[this.GENE.COLOR_G] : b[this.GENE.COLOR_G];
     child[this.GENE.COLOR_B] = Math.random() < 0.5 ? a[this.GENE.COLOR_B] : b[this.GENE.COLOR_B];
-    
     return child;
   },
 
@@ -214,7 +268,7 @@ const Utils = {
     return verts[0];
   },
   
-  // Gene index constants for clarity and DRY
+  // Gene index constants
   GENE: {
     // Body genes
     RADIUS: 0,
@@ -223,7 +277,7 @@ const Utils = {
     // Derived genes (after limb genes)
     FREQ: 3 + CONFIG.LIMB_COUNT * 5,
     AMP: 4 + CONFIG.LIMB_COUNT * 5,
-    // Main genes (fixed positions)
+    // Main genes
     SIDES: 53,
     BODY_SYM: 54,
     MOVE_SYM: 55,
@@ -239,12 +293,9 @@ const Utils = {
     POWER_RATIO: 64
   },
   
-  // Get gene value with fallback
   getGene(genotype, gene, fallback=1.0) {
     return genotype[gene] !== undefined ? genotype[gene] : fallback;
   },
-  
-  // Get formatted gene value for display
   getFormattedGene(genotype, gene, fallback=1.0) {
     const value = this.getGene(genotype, gene, fallback);
     return Math.round(value * 100) / 100;
@@ -278,11 +329,10 @@ function resize(){
  ***********************************************************************/
 function createRandomGenotype(){
   const LC = CONFIG.LIMB_COUNT;
-  // ~65 genes (expanded from ~60)
   let g = [];
   const geneCount = 3 + (LC*5) + 2 + LC + 1 + 2 + 3 + 1 + 5;
 
-  // Initialize array with default values
+  // Initialize array
   for (let i = 0; i < geneCount; i++) {
     g[i] = 0;
   }
@@ -295,11 +345,11 @@ function createRandomGenotype(){
   // Limb genes
   for (let i = 0; i < LC; i++) {
     let base = 3 + i*5;
-    g[base] = Utils.rand(0, 2*Math.PI);     // Angle
-    g[base+1] = Utils.rand(10, 40);         // Length
-    g[base+2] = Utils.rand(0.1, 0.7);       // Branch angle
-    g[base+3] = Utils.rand(0.5, 0.9);       // Length ratio
-    g[base+4] = Utils.rand(0, 2*Math.PI);   // Phase
+    g[base] = Utils.rand(0, 2*Math.PI);
+    g[base+1] = Utils.rand(10, 40);
+    g[base+2] = Utils.rand(0.1, 0.7);
+    g[base+3] = Utils.rand(0.5, 0.9);
+    g[base+4] = Utils.rand(0, 2*Math.PI);
   }
   
   // Frequency and amplitude
@@ -311,25 +361,25 @@ function createRandomGenotype(){
     g[45 + i] = Math.random();
   }
   
-  // Shape and symmetry genes
+  // Shape and symmetry
   g[Utils.GENE.SIDES] = Math.floor(Utils.rand(3, 9));
-  g[Utils.GENE.BODY_SYM] = Utils.rand(0, 0.4);  // was 1; now up to 0.4
-  g[Utils.GENE.MOVE_SYM] = 0;                   // or random, if you want
+  g[Utils.GENE.BODY_SYM] = Utils.rand(0, 0.4);
+  g[Utils.GENE.MOVE_SYM] = 0;
   
-  // Color genes
+  // Color
   g[Utils.GENE.COLOR_R] = Utils.rand(0, 255);
   g[Utils.GENE.COLOR_G] = Utils.rand(0, 255);
   g[Utils.GENE.COLOR_B] = Utils.rand(0, 255);
   
-  // Energy gene
+  // Energy
   g[Utils.GENE.ENERGY] = Utils.rand(0, 10);
   
-  // Physical trait genes
-  g[Utils.GENE.DRAG_MOD] = Utils.rand(0.5, 1.5);       // Streamlined vs bulky
-  g[Utils.GENE.ROT_DRAG_MOD] = Utils.rand(0.7, 1.3);   // Rotation ease
-  g[Utils.GENE.ELASTICITY] = Utils.rand(0.8, 1.2);     // Bounciness
-  g[Utils.GENE.TORQUE_EFF] = Utils.rand(0.8, 1.2);     // Rotation efficiency
-  g[Utils.GENE.POWER_RATIO] = Utils.rand(0.8, 1.5);    // Power stroke emphasis
+  // Physical traits
+  g[Utils.GENE.DRAG_MOD] = Utils.rand(0.5, 1.5);
+  g[Utils.GENE.ROT_DRAG_MOD] = Utils.rand(0.7, 1.3);
+  g[Utils.GENE.ELASTICITY] = Utils.rand(0.8, 1.2);
+  g[Utils.GENE.TORQUE_EFF] = Utils.rand(0.8, 1.2);
+  g[Utils.GENE.POWER_RATIO] = Utils.rand(0.8, 1.5);
 
   return g;
 }
@@ -337,21 +387,18 @@ function createRandomGenotype(){
 function mutate(g, mutationRate=CONFIG.MUTATION_RATE){
   const LC = CONFIG.LIMB_COUNT;
   
-  // Apply mutation with the specified rate
   for(let i=0; i<g.length; i++){
     if(Math.random() < mutationRate){
-      // Apply mutation - more variance for color genes to encourage diversity
+      // Color genes can change more dramatically
       if (i === Utils.GENE.COLOR_R || i === Utils.GENE.COLOR_G || i === Utils.GENE.COLOR_B) {
-        // Colors can change more dramatically
         g[i] += Utils.rand(-50, 50);
       } else {
-        // Other genes have proportional changes
         g[i] *= (1 + Utils.rand(-0.2, 0.2));
       }
     }
   }
   
-  // Clamp gene values to maintain valid ranges
+  // Clamps
   g[Utils.GENE.SIDES] = Utils.clamp(Math.round(g[Utils.GENE.SIDES]), 3, 8);
   g[Utils.GENE.BODY_SYM] = Utils.clamp(g[Utils.GENE.BODY_SYM], 0, 1);
   g[Utils.GENE.MOVE_SYM] = Utils.clamp(g[Utils.GENE.MOVE_SYM], 0, 1);
@@ -360,18 +407,15 @@ function mutate(g, mutationRate=CONFIG.MUTATION_RATE){
   g[Utils.GENE.COLOR_B] = Utils.clamp(g[Utils.GENE.COLOR_B], 0, 255);
   g[Utils.GENE.ENERGY] = Utils.clamp(g[Utils.GENE.ENERGY], 0, 10);
   
-  // Clamp physical trait genes to reasonable ranges
   g[Utils.GENE.DRAG_MOD] = Utils.clamp(g[Utils.GENE.DRAG_MOD], 0.5, 1.5);
   g[Utils.GENE.ROT_DRAG_MOD] = Utils.clamp(g[Utils.GENE.ROT_DRAG_MOD], 0.7, 1.3);
   g[Utils.GENE.ELASTICITY] = Utils.clamp(g[Utils.GENE.ELASTICITY], 0.8, 1.2);
   g[Utils.GENE.TORQUE_EFF] = Utils.clamp(g[Utils.GENE.TORQUE_EFF], 0.8, 1.2);
   g[Utils.GENE.POWER_RATIO] = Utils.clamp(g[Utils.GENE.POWER_RATIO], 0.8, 1.5);
 
-  // Fix frequency and amplitude
   g[Utils.GENE.FREQ] = Math.max(g[Utils.GENE.FREQ], 1);
   g[Utils.GENE.AMP] = Math.max(g[Utils.GENE.AMP], 0.5);
 
-  // Fix limb genes
   for(let i=0; i<LC; i++){
     let base = 3 + i*5;
     g[base+1] = Math.max(g[base+1], 1);
@@ -388,29 +432,21 @@ function applyBodySymmetry(g){
   let half = LC / 2;
   for (let i = 0; i < half; i++) {
     let L = 3 + i * 5, R = 3 + (i + half) * 5;
-    
-    // Get left side limb values
     let lAng = g[L];
     let lLen = g[L + 1];
     let lBrA = g[L + 2];
     let lRat = g[L + 3];
-    
-    // Get right side limb values
     let rAng = g[R];
     let rLen = g[R + 1];
     let rBrA = g[R + 2];
     let rRat = g[R + 3];
-    
-    // Mirror the angle for symmetry
     let lMir = -lAng;
     
-    // Apply symmetry factor (sf controls how symmetric the body is)
     g[R]   = sf * lMir + (1 - sf) * rAng;
     g[R+1] = sf * lLen + (1 - sf) * rLen;
     g[R+2] = sf * lBrA + (1 - sf) * rBrA;
     g[R+3] = sf * lRat + (1 - sf) * rRat;
 
-    // Apply symmetry to attachment points
     let la = g[45 + i], ra = g[45 + (i + half)];
     let laMir = 1 - la;
     g[45 + (i + half)] = sf * laMir + (1 - sf) * ra;
@@ -425,8 +461,6 @@ function applyMovementSymmetry(g){
   let half = LC / 2;
   for (let i = 0; i < half; i++) {
     let L = 3 + i * 5, R = 3 + (i + half) * 5;
-    
-    // Apply symmetry to phase values for movement
     let lPh = g[L + 4], rPh = g[R + 4];
     g[R + 4] = msf * lPh + (1 - msf) * rPh;
   }
@@ -446,7 +480,7 @@ function initPopulation(){
   population=[];
   for(let i=0;i< CONFIG.POP_SIZE;i++){
     let geno= createRandomGenotype();
-    population.push({
+    let crab = {
       genotype: geno,
       x: Math.random()*W,
       y: Math.random()*H,
@@ -454,37 +488,88 @@ function initPopulation(){
       orientation: Math.random()* 2*Math.PI,
       omega:0,
       selected:false
-    });
+    };
+    createCrabPattern(crab);
+    population.push(crab);
   }
   updateBreedButton();
+}
+
+// Patterns for each crab
+function createCrabPattern(crab) {
+  const g = crab.genotype;
+  let colR = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_R)), 0, 255);
+  let colG = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_G)), 0, 255);
+  let colB = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_B)), 0, 255);
+  
+  let dragMod = Utils.getGene(g, Utils.GENE.DRAG_MOD);
+  let elasticity = Utils.getGene(g, Utils.GENE.ELASTICITY);
+  let rad = Utils.getGene(g, Utils.GENE.RADIUS);
+  let sides = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.SIDES)), 3, 8);
+
+  let colorIntensity = 0.8 + 0.4 * (elasticity - 0.8) / 0.4;
+
+  const patternCanvas = document.createElement('canvas');
+  const patternSize = Math.max(rad * 2, 100);
+  patternCanvas.width = patternSize;
+  patternCanvas.height = patternSize;
+  const patternCtx = patternCanvas.getContext('2d');
+  
+  patternCtx.fillStyle = `rgb(${Math.min(255, colR * colorIntensity)},
+                             ${Math.min(255, colG * colorIntensity)},
+                             ${Math.min(255, colB * colorIntensity)})`;
+  patternCtx.fillRect(0, 0, patternSize, patternSize);
+  
+  const patternDensity = Math.min(30, sides * 4);
+  const patternOpacity = 0.1 + 0.1 * dragMod;
+  
+  for (let i = 0; i < patternDensity; i++) {
+    const px = Math.random() * patternSize;
+    const py = Math.random() * patternSize;
+    const patternElementSize = 2 + Math.random() * 4;
+    
+    patternCtx.beginPath();
+    patternCtx.arc(px, py, patternElementSize, 0, Math.PI * 2);
+    patternCtx.fillStyle = `rgba(${colR * 0.7}, ${colG * 0.7}, ${colB * 0.7}, ${patternOpacity})`;
+    patternCtx.fill();
+  }
+  
+  for (let i = 0; i < patternDensity/2; i++) {
+    const px = Math.random() * patternSize;
+    const py = Math.random() * patternSize;
+    const highlightSize = 1 + Math.random() * 2;
+    
+    patternCtx.beginPath();
+    patternCtx.arc(px, py, highlightSize, 0, Math.PI * 2);
+    patternCtx.fillStyle = `rgba(255, 255, 255, ${0.1 + 0.1 * elasticity})`;
+    patternCtx.fill();
+  }
+
+  crab.pattern = ctx.createPattern(patternCanvas, 'repeat');
+  crab._patternInfo = {
+    colR, colG, colB, 
+    dragMod, elasticity, sides
+  };
 }
 
 function breedNextGeneration(){
   let chosen = population.filter(c => c.selected);
   if(chosen.length < 2) return;
   
-  // Calculate approximate relative fitness based on traits
   chosen.forEach(crab => {
-    // Basic fitness calculation - can be adjusted based on desired traits
-    const dragFitness = 1.2 - Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD); // Lower drag is better
-    const torqueFitness = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF); // Higher torque efficiency is better
-    const powerFitness = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO); // Higher power ratio is better
-    
-    // Combined fitness score - weighted average
+    const dragFitness = 1.2 - Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD);
+    const torqueFitness = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
+    const powerFitness = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO);
     crab._fitness = (dragFitness + torqueFitness * 1.2 + powerFitness) / 3.2;
   });
   
-  // Sort by fitness (optional - for weighted selection)
   chosen.sort((a, b) => b._fitness - a._fitness);
   
-  // Create the new population with improved breeding strategy
   let newPop = [];
   
-  // Elitism: Keep the best parents (optional - preserves good traits)
   const eliteCount = Math.min(2, chosen.length);
   for (let i = 0; i < eliteCount; i++) {
-    // Clone the elite individuals but don't select them
-    newPop.push({
+    let crab = {
       genotype: [...chosen[i].genotype],
       x: Math.random() * W,
       y: Math.random() * H,
@@ -492,15 +577,13 @@ function breedNextGeneration(){
       orientation: Math.random() * 2 * Math.PI,
       omega: 0,
       selected: false
-    });
+    };
+    createCrabPattern(crab);
+    newPop.push(crab);
   }
   
-  // Fill the rest with children using improved parent selection
   while (newPop.length < CONFIG.POP_SIZE) {
-    // Tournament selection: select parents based on random sampling and fitness
     let parent1, parent2;
-    
-    // Tournament for first parent
     const tournamentSize = Math.min(3, chosen.length);
     let candidates = [];
     for (let i = 0; i < tournamentSize; i++) {
@@ -509,7 +592,6 @@ function breedNextGeneration(){
     candidates.sort((a, b) => b._fitness - a._fitness); 
     parent1 = candidates[0].genotype;
     
-    // Tournament for second parent (ensuring different from first)
     candidates = [];
     for (let i = 0; i < tournamentSize; i++) {
       candidates.push(chosen[Math.floor(Math.random() * chosen.length)]);
@@ -517,15 +599,10 @@ function breedNextGeneration(){
     candidates.sort((a, b) => b._fitness - a._fitness);
     parent2 = candidates[0].genotype;
     
-    // Crossover and mutation
     let child = Utils.crossover(parent1, parent2);
+    mutate(child, CONFIG.MUTATION_RATE);
     
-    // Variable mutation rate - more diverse mutations for experimental traits
-    const baseMutationRate = CONFIG.MUTATION_RATE;
-    mutate(child, baseMutationRate);
-    
-    // Add the child to the new population
-    newPop.push({
+    let crab = {
       genotype: child,
       x: Math.random() * W,
       y: Math.random() * H,
@@ -533,7 +610,9 @@ function breedNextGeneration(){
       orientation: Math.random() * 2 * Math.PI,
       omega: 0,
       selected: false
-    });
+    };
+    createCrabPattern(crab);
+    newPop.push(crab);
   }
   
   population = newPop;
@@ -544,26 +623,22 @@ function breedNextGeneration(){
  * SWIM MOVEMENT + COLLISIONS
  ***********************************************************************/
 function updateMovement(){
-  // 1) limb forces + drag
   for(let crab of population){
     applyLimbForces(crab);
     applyQuadraticDrag(crab);
     applyGravityForce(crab);
   }
-  // 2) collisions
   for(let i=0;i< population.length; i++){
     for(let j=i+1;j< population.length;j++){
       handleCrabCollision(population[i], population[j]);
     }
   }
-  // 3) integrate + walls
   for(let crab of population){
     integrateCrab(crab);
     handleWallCollision(crab);
   }
 }
 
-/** Limb-based forces => netFx, netFy, netTorque. */
 function applyLimbForces(crab){
   const LC= CONFIG.LIMB_COUNT;
   crab._fx=0; 
@@ -576,28 +651,19 @@ function applyLimbForces(crab){
   let freq= Utils.getGene(crab.genotype, Utils.GENE.FREQ);
   let amp = Utils.getGene(crab.genotype, Utils.GENE.AMP);
   
-  // Get genetic power ratio and torque efficiency
   let powerRatio = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO);
   let torqueEfficiency = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
-  
-  // Water spider movement: periodic pulse pattern
-  // Adds a major pulse of movement at regular intervals
+
   const pulsePhase = (globalTime % CONFIG.PULSE_INTERVAL) / CONFIG.PULSE_INTERVAL;
   const pulseFactor = Math.pow(Math.sin(pulsePhase * Math.PI), 2);
   
-  // Calculate current speed for skittering effect
   const currentSpeed = Math.sqrt(crab.vx * crab.vx + crab.vy * crab.vy);
   
-  // Water spiders tend to move in short bursts followed by pauses
-  // Apply skittering effect - periodic starting and stopping
-  const skitterOffset = rad * 0.1; // Unique skitter pattern based on crab size
+  const skitterOffset = rad * 0.1;
   const skitterPhase = Math.sin(globalTime * 3 + skitterOffset) * CONFIG.SKITTER_FACTOR;
   
-  // Surface tension effect - makes movement more pronounced when moving slow
-  // (water spiders need to overcome surface tension to start moving)
   const surfaceTensionFactor = CONFIG.SURFACE_TENSION / (1 + currentSpeed * 0.5);
   
-  // Apply these factors across all limbs
   for(let i=0;i<LC;i++){
     let base= 3+ i*5;
     let bAng= crab.genotype[base+0];
@@ -607,25 +673,16 @@ function applyLimbForces(crab){
     let cyc= freq*globalTime+ phase;
     let cycMod= cyc % (2*Math.PI);
     let inPower= (cycMod>=0 && cycMod<Math.PI);
-
-    // More asymmetric motion for water spider movement
-    // Add skittering effect to the sine wave
     let rawSine= amp* Math.sin(cycMod + skitterPhase);
-    
-    // Apply genetic power ratio + surface tension effects
-    let powerFactor = inPower ? 
-      CONFIG.POWER_FACTOR * powerRatio * (1 + surfaceTensionFactor) : 
-      CONFIG.RECOVERY_FACTOR;
-    
-    // Apply periodic pulse for water spider's jumping effect
+
+    let powerFactor = inPower 
+      ? CONFIG.POWER_FACTOR * powerRatio * (1 + surfaceTensionFactor) 
+      : CONFIG.RECOVERY_FACTOR;
     if (inPower) {
       powerFactor *= (1 + pulseFactor * 0.8);
     }
     
-    // Limb force with water spider physics
     let thrust= powerFactor * Math.abs(rawSine) * (limbLen/40);
-    
-    // Create ripple effect - stronger push when dipping into water
     const rippleEffect = Math.abs(Math.sin(cycMod * 0.5)) * CONFIG.RIPPLE_EFFECT;
     if (inPower && Math.sin(cycMod) > 0.7) {
       thrust *= (1 + rippleEffect);
@@ -638,72 +695,44 @@ function applyLimbForces(crab){
     crab._fx+= fx; 
     crab._fy+= fy;
 
-    // Enhanced torque calculation with water spider movement effects
-    // Water spiders often turn with distinct jerky rotations
-    let offR= rad * (0.6 + 0.4 * Math.abs(Math.sin(bAng))); // Variable radius based on limb angle
+    let offR= rad * (0.6 + 0.4 * Math.abs(Math.sin(bAng)));
     let offX= offR* Math.cos(crab.orientation+ bAng);
     let offY= offR* Math.sin(crab.orientation+ bAng);
-    
-    // Apply a directional bias to torque based on limb position
     let torqueContribution = (offX* fy - offY* fx);
-    
-    // Add skittering effect to rotation
+
     const rotationSkitter = 0.1 * Math.sin(globalTime * 2 + i) * CONFIG.SKITTER_FACTOR;
-    
-    // Add water spider's characteristic turn pattern
     let phaseEffect = (0.05 + rotationSkitter) * Math.sin(cycMod + bAng) * thrust;
-    
-    // Apply genetic torque efficiency
     crab._torque += (torqueContribution + phaseEffect) * torqueEfficiency;
   }
 }
 
-/** Enhanced quadratic drag + directional + rotational drag. */
 function applyQuadraticDrag(crab){
-  // Get genetic drag modifiers
   let dragMod = Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD);
   let rotDragMod = Utils.getGene(crab.genotype, Utils.GENE.ROT_DRAG_MOD);
   
-  // Get crab's current velocity
   let vx = crab.vx, vy = crab.vy;
   let s2 = vx*vx + vy*vy;
   
   if(s2 > 0){
     let s = Math.sqrt(s2);
-    
-    // Water surface resistance - stronger when moving slowly (due to surface tension)
-    // Water spiders experience more resistance when starting to move
     const waterResistanceFactor = CONFIG.WATER_RESISTANCE * (1.5 / (1 + s));
-    
-    // Base drag force - quadratic with speed
     let baseDragMag = CONFIG.DRAG_COEFF * dragMod * s2 * waterResistanceFactor;
     
-    // Get orientation for directional drag
     let crabAngle = crab.orientation;
     let moveAngle = Math.atan2(vy, vx);
-    
-    // Calculate angle difference between movement and orientation
     let angleDiff = Math.abs((moveAngle - crabAngle + Math.PI) % (2 * Math.PI) - Math.PI);
     
-    // Water spiders move more efficiently in certain directions
-    // They have more drag when moving sideways compared to forward/backward
-    let directionFactor = 0.7 + 0.6 * (angleDiff / Math.PI); // 0.7-1.3 range (more extreme)
-    
-    // Calculate final drag magnitude
+    let directionFactor = 0.7 + 0.6 * (angleDiff / Math.PI);
     let dragMag = baseDragMag * directionFactor;
     
-    // Apply drag force
     crab._fx += -dragMag * (vx/s);
     crab._fy += -dragMag * (vy/s);
     
-    // Water spiders tend to align with movement direction at high speeds
     if (s > 3 && angleDiff > 0.3) {
       let alignmentTorque = 0.03 * Math.sin(moveAngle - crabAngle) * s * dragMod;
       crab._torque += alignmentTorque;
     }
     
-    // Add water surface skittering effect - slight jitter in movement
-    // This creates the characteristic "skating" motion on water surface
     if (s < 5) {
       const skitterFreq = 3.0 + s;
       const skitterMag = 0.02 * (5 - s) / 5;
@@ -712,49 +741,37 @@ function applyQuadraticDrag(crab){
     }
   }
   
-  // Enhanced rotational drag with water surface effects
-  // Water spiders have more damped rotation due to surface tension
   let omegaSq = crab.omega * crab.omega;
   let rotDrag = CONFIG.ROT_DRAG * rotDragMod * (1 + 0.15 * omegaSq);
   crab._torque += -rotDrag * crab.omega;
 }
 
-/** Apply a gentle gravitational force toward center */
 function applyGravityForce(crab) {
-  // Calculate vector to center
   let dx = W/2 - crab.x;
   let dy = H/2 - crab.y;
   let distSq = dx*dx + dy*dy;
   let dist = Math.sqrt(distSq) || 0.0001;
   
-  if (dist > CONFIG.GRAVITY_FALLOFF) return; // Too far for gravity
+  if (dist > CONFIG.GRAVITY_FALLOFF) return;
   
-  // Calculate gravity strength with inverse square falloff
   let gravityFactor = 1 - (dist / CONFIG.GRAVITY_FALLOFF);
   gravityFactor = Math.max(0, gravityFactor * gravityFactor);
   
-  // Calculate normalized direction to center
   let nx = dx / dist;
   let ny = dy / dist;
   
-  // Apply gravitational force
   crab._fx += nx * CONFIG.GRAVITY_STRENGTH * gravityFactor;
   crab._fy += ny * CONFIG.GRAVITY_STRENGTH * gravityFactor;
   
-  // Add slight rotation based on angle to center for more natural orbiting behavior
   let angleToCenter = Math.atan2(dy, dx);
   let angleDiff = angleToCenter - crab.orientation;
-  // Normalize angleDiff to [-PI, PI]
   angleDiff = (angleDiff + Math.PI) % (2 * Math.PI) - Math.PI;
-  
-  // Slight torque to make crab orient toward or perpendicular to center
   crab._torque += 0.01 * Math.sin(angleDiff) * gravityFactor;
 }
 
-/** Off-center collision => real perimeter contact => torque. */
 function handleCrabCollision(A, B) {
   let dx = B.x - A.x, dy = B.y - A.y;
-  let distSq = dx * dx + dy * dy;
+  let distSq = dx*dx + dy*dy;
   let minDist = CONFIG.CRAB_RADIUS * 2;
   if (distSq >= minDist * minDist) return;
   
@@ -762,84 +779,66 @@ function handleCrabCollision(A, B) {
   let overlap = minDist - dist;
   let nx = dx / dist, ny = dy / dist;
   
-  // Calculate relative velocities including rotation effects
   let relPosAx = CONFIG.CRAB_RADIUS * nx;
   let relPosAy = CONFIG.CRAB_RADIUS * ny;
   let relPosBx = -CONFIG.CRAB_RADIUS * nx;
   let relPosBy = -CONFIG.CRAB_RADIUS * ny;
   
-  // Add rotational component to relative velocity
   let rvx = B.vx + (-B.omega * relPosBy) - (A.vx + (-A.omega * relPosAy));
   let rvy = B.vy + (B.omega * relPosBx) - (A.vy + (A.omega * relPosAx));
   let approach = rvx * nx + rvy * ny;
   
   if (approach < 0) {
-    // Get genetic elasticity for both crabs and average them
     let elasticityA = Utils.getGene(A.genotype, Utils.GENE.ELASTICITY);
     let elasticityB = Utils.getGene(B.genotype, Utils.GENE.ELASTICITY);
     let avgElasticity = (elasticityA + elasticityB) / 2;
     
-    // Apply personalized elasticity (restitution)
     let e = CONFIG.RESTITUTION * avgElasticity;
-    let j = -(1 + e) * approach * 0.5; // impulse magnitude
+    let j = -(1 + e) * approach * 0.5;
     let impx = j * nx, impy = j * ny;
-    
-    // linear impulse
+
     A.vx -= impx; A.vy -= impy;
     B.vx += impx; B.vy += impy;
-    
-    // perimeter contact points
+
     let cAx = A.x + CONFIG.CRAB_RADIUS * nx;
     let cAy = A.y + CONFIG.CRAB_RADIUS * ny;
     let cBx = B.x - CONFIG.CRAB_RADIUS * nx;
     let cBy = B.y - CONFIG.CRAB_RADIUS * ny;
-    
-    // torque for A => impulse is -(impx, impy)
+
     let offAx = cAx - A.x, offAy = cAy - A.y;
     let torqueA = offAx * (-impy) - offAy * (-impx);
-    
-    // Apply a glancing factor to increase rotation on off-center hits
     let glancingFactorA = 1.0 - Math.abs(nx * dx + ny * dy) / dist;
     torqueA *= (1.0 + glancingFactorA);
-    
     A.omega -= (torqueA * CONFIG.COLLISION_TORQUE_FACTOR) / (A._inertia || 1);
-    
-    // torque for B => impulse is (impx, impy)
+
     let offBx = cBx - B.x, offBy = cBy - B.y;
     let torqueB = offBx * impy - offBy * impx;
-    
-    // Apply same glancing factor for B
     let glancingFactorB = glancingFactorA;
     torqueB *= (1.0 + glancingFactorB);
-    
     B.omega += (torqueB * CONFIG.COLLISION_TORQUE_FACTOR) / (B._inertia || 1);
     
-    // Create visual collision effect
     createCollisionEffect((cAx + cBx) / 2, (cAy + cBy) / 2, j, avgElasticity);
   }
   
-  // push out overlap
   let push = CONFIG.COLLISION_REPULSION * overlap * 0.5;
   A.x -= push * nx; A.y -= push * ny;
   B.x += push * nx; B.y += push * ny;
 }
 
-// Track active collision effects
+/***********************************************************************
+ * 2) CONSOLIDATE COLLISION EFFECTS INTO A SINGLE ARRAY
+ ***********************************************************************/
 const collisionEffects = [];
 
 /** Create a visual effect at collision point */
 function createCollisionEffect(x, y, intensity, elasticity) {
-  // Minimum intensity threshold to create visual effect
   const minIntensity = 0.2;
   if (intensity < minIntensity) return;
   
-  // Scale effect size with intensity and elasticity
   const size = Math.min(30, 5 + intensity * 3);
   const lifespan = Math.min(1.0, 0.3 + intensity * 0.04 + elasticity * 0.2);
   
-  // Create ripple particles
   const particleCount = Math.floor(3 + intensity * 0.5);
-  
   for (let i = 0; i < particleCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 1 + Math.random() * 2 * intensity;
@@ -847,8 +846,7 @@ function createCollisionEffect(x, y, intensity, elasticity) {
     const lifetime = 0.5 + Math.random() * 0.5 * lifespan;
     
     collisionEffects.push({
-      x: x,
-      y: y,
+      x, y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       size: particleSize,
@@ -858,34 +856,31 @@ function createCollisionEffect(x, y, intensity, elasticity) {
     });
   }
   
-  // Create ripple wave
+  // Ripple wave
   collisionEffects.push({
-    x: x,
-    y: y,
+    x, y,
     size: size * 0.5,
     maxSize: size * 3,
     life: lifespan,
     maxLife: lifespan,
     type: 'ripple',
-    intensity: intensity,
-    elasticity: elasticity
+    intensity,
+    elasticity
   });
   
-  // Create flash effect
+  // Flash
   collisionEffects.push({
-    x: x,
-    y: y,
-    size: size,
+    x, y,
+    size,
     life: lifespan * 0.3,
     maxLife: lifespan * 0.3,
     type: 'flash',
-    intensity: intensity
+    intensity
   });
 }
 
 /** Update and draw collision effects */
 function updateCollisionEffects() {
-  // Update effects
   for (let i = collisionEffects.length - 1; i >= 0; i--) {
     const effect = collisionEffects[i];
     effect.life -= CONFIG.TIME_STEP;
@@ -895,57 +890,44 @@ function updateCollisionEffects() {
       continue;
     }
     
-    // Update position for particle effects
     if (effect.type === 'particle') {
       effect.x += effect.vx * CONFIG.TIME_STEP;
       effect.y += effect.vy * CONFIG.TIME_STEP;
-      
-      // Slow down particles
       effect.vx *= 0.95;
       effect.vy *= 0.95;
-    }
-    
-    // Update size for ripple effects
+    } 
     if (effect.type === 'ripple') {
       effect.size += (effect.maxSize - effect.size) * CONFIG.TIME_STEP * 3;
     }
   }
   
-  // Draw effects
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   
   for (const effect of collisionEffects) {
     const lifeFactor = effect.life / effect.maxLife;
-    
     if (effect.type === 'particle') {
-      // Draw particle with fade out
       ctx.beginPath();
       ctx.arc(effect.x, effect.y, effect.size * lifeFactor, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(255, 255, 255, ${lifeFactor * 0.7})`;
       ctx.fill();
     } 
     else if (effect.type === 'ripple') {
-      // Draw expanding ripple
       const gradient = ctx.createRadialGradient(
         effect.x, effect.y, 0,
         effect.x, effect.y, effect.size
       );
-      
-      // Color based on elasticity (bouncier = more blue)
       const hue = 180 + 40 * (effect.elasticity - 1);
-      
       gradient.addColorStop(0, `hsla(${hue}, 80%, 70%, 0)`);
       gradient.addColorStop(0.3, `hsla(${hue}, 80%, 70%, ${lifeFactor * 0.2})`);
       gradient.addColorStop(0.7, `hsla(${hue}, 70%, 60%, ${lifeFactor * 0.1})`);
       gradient.addColorStop(1, `hsla(${hue}, 60%, 50%, 0)`);
-      
+
       ctx.beginPath();
       ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
       ctx.fillStyle = gradient;
       ctx.fill();
       
-      // Draw ripple stroke
       ctx.beginPath();
       ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
       ctx.strokeStyle = `hsla(${hue}, 80%, 70%, ${lifeFactor * 0.3})`;
@@ -953,37 +935,29 @@ function updateCollisionEffects() {
       ctx.stroke();
     } 
     else if (effect.type === 'flash') {
-      // Draw impact flash
       const gradient = ctx.createRadialGradient(
         effect.x, effect.y, 0,
         effect.x, effect.y, effect.size
       );
-      
       gradient.addColorStop(0, `rgba(255, 255, 255, ${lifeFactor * 0.8})`);
       gradient.addColorStop(0.5, `rgba(200, 220, 255, ${lifeFactor * 0.4})`);
       gradient.addColorStop(1, `rgba(150, 180, 255, 0)`);
-      
+
       ctx.beginPath();
       ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
       ctx.fillStyle = gradient;
       ctx.fill();
     }
   }
-  
   ctx.restore();
 }
 
-/** integrate => big torque multiplier => actual spin. */
 function integrateCrab(crab){
   let dt= CONFIG.TIME_STEP;
   
-  // Get genetic torque efficiency
   let torqueEfficiency = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
-  
-  // Apply personalized torque multiplier
   let torque= crab._torque * CONFIG.TORQUE_MULTIPLIER * torqueEfficiency;
   
-  // Apply a small dampening factor based on speed to prevent excessive rotation
   let speedFactor = Math.min(1, Math.sqrt(crab.vx*crab.vx + crab.vy*crab.vy) / 10);
   torque *= (0.7 + 0.3 * speedFactor);
   
@@ -993,8 +967,6 @@ function integrateCrab(crab){
   crab.vy+= crab._fy* dt;
   crab.omega+= alpha* dt;
   
-  // Apply a speed-dependent dampening to omega 
-  // prevents unrealistic fast rotations
   let omegaLimit = 8;
   if (Math.abs(crab.omega) > omegaLimit) {
     crab.omega = Math.sign(crab.omega) * omegaLimit;
@@ -1003,27 +975,18 @@ function integrateCrab(crab){
   crab.x+= crab.vx* dt;
   crab.y+= crab.vy* dt;
   crab.orientation+= crab.omega* dt;
-  
-  // Keep orientation in a reasonable range
   crab.orientation = crab.orientation % (2 * Math.PI);
 }
 
-/** partial-elastic bounce from walls, no torque from walls for simplicity. */
 function handleWallCollision(crab){
   let e = CONFIG.RESTITUTION;
-  // Get elasticity from crab's genes
   let elasticity = Utils.getGene(crab.genotype, Utils.GENE.ELASTICITY);
-  
-  // Water spiders tend to stay at the edges of water surfaces
-  // They experience less rebound when hitting walls (more like sticking)
-  const waterEdgeEffect = 0.7; // Reduces bounce at edges
+  const waterEdgeEffect = 0.7; 
   e *= waterEdgeEffect * elasticity;
   
-  // Wall collision handling with water spider characteristics
   if(crab.x < 0){
     crab.x = 0;
     if(crab.vx < 0) {
-      // Add slight upward/downward deflection like water spiders on edges
       const deflection = Utils.rand(-0.2, 0.2) * Math.abs(crab.vx);
       crab.vy += deflection;
       crab.vx = -e * crab.vx;
@@ -1052,18 +1015,13 @@ function handleWallCollision(crab){
     }
   }
   
-  // Water spiders often change direction after hitting walls
-  // Add slight rotation when hitting edges
   if(crab.x <= 0 || crab.x >= W || crab.y <= 0 || crab.y >= H) {
-    // Add a small random spin when hitting walls
     crab.omega += Utils.rand(-0.2, 0.2);
     
-    // Create small ripple effect at wall contact point
     const intensity = Math.min(Math.sqrt(crab.vx*crab.vx + crab.vy*crab.vy) * 0.2, 0.5);
     if(intensity > 0.1) {
       let contactX = crab.x;
       let contactY = crab.y;
-      // Adjust contact point to be exactly on the wall
       if(crab.x <= 0) contactX = 0;
       if(crab.x >= W) contactX = W;
       if(crab.y <= 0) contactY = 0;
@@ -1080,26 +1038,20 @@ function handleWallCollision(crab){
 function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
   const { torqueEff, dragMod, powerRatio } = geneInfo || {};
   
-  // Enhance limbs with slightly curved segments
   if (depth < 1 || length < 2) {
-    // Create slightly curved end segments
     ctx.beginPath();
     ctx.moveTo(0, 0);
     
-    // Control points for slight curve
     const cp1x = length * 0.3;
     const cp1y = length * 0.05 * Math.sin(globalTime + depth);
     const cp2x = length * 0.7;
     const cp2y = length * 0.03 * Math.sin(globalTime * 0.8 + depth);
     
     ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, length, 0);
-    
-    // Vary stroke color slightly based on depth
     const alpha = 0.8 - (depth * 0.1);
     ctx.strokeStyle = `rgba(30, 40, 50, ${alpha})`;
     ctx.stroke();
     
-    // Add tiny joint circle at the end
     ctx.beginPath();
     ctx.arc(length, 0, Math.max(0.3, length * 0.03), 0, Math.PI * 2);
     ctx.fillStyle = `rgba(40, 50, 60, ${alpha})`;
@@ -1109,18 +1061,14 @@ function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
     return;
   }
   
-  // Add texture to the limb segments with a gradient
   const limbGradient = ctx.createLinearGradient(0, 0, length, 0);
   limbGradient.addColorStop(0, `rgba(40, 50, 60, 0.9)`);
   limbGradient.addColorStop(1, `rgba(30, 40, 50, 0.7)`);
   
   ctx.beginPath();
-  // Create tapered limb with varying width based on genes
   ctx.lineWidth = Math.max(1, 2 * (1 + 0.3 * (torqueEff || 1)));
   
-  // Slightly curved main segment
   const cpOffset = length * 0.05 * Math.sin(globalTime * 0.3);
-  
   ctx.moveTo(0, 0);
   ctx.bezierCurveTo(
     length * 0.3, cpOffset, 
@@ -1131,12 +1079,9 @@ function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
   ctx.strokeStyle = limbGradient;
   ctx.stroke();
   
-  // Add a tiny joint sphere at the branch point
   ctx.beginPath();
   const jointSize = Math.max(0.5, length * 0.04 * (dragMod || 1));
   ctx.arc(length, 0, jointSize, 0, Math.PI * 2);
-  
-  // Joint color based on power ratio
   const jointR = 40 + (powerRatio ? Math.min(30, powerRatio * 20) : 0);
   const jointG = 50 + (powerRatio ? Math.min(20, powerRatio * 15) : 0);
   ctx.fillStyle = `rgb(${jointR}, ${jointG}, 60)`;
@@ -1144,12 +1089,11 @@ function drawBranch(ctx, length, angle, ratio, depth, geneInfo) {
   
   ctx.translate(length, 0);
   
-  // Recursively draw branches with enhanced styling
   ctx.save();
   ctx.rotate(angle);
   drawBranch(ctx, length * ratio, angle, ratio, depth - 1, geneInfo);
   ctx.restore();
-  
+
   ctx.save();
   ctx.rotate(-angle);
   drawBranch(ctx, length * ratio, angle, ratio, depth - 1, geneInfo);
@@ -1163,7 +1107,6 @@ function drawEnergyDots(ctx, eVal, bodyR, color) {
   const ring = bodyR * 0.25;
   const dotBase = bodyR * 0.07;
   
-  // Extract the base color components
   const baseRgb = color.match(/\d+/g);
   const r = parseInt(baseRgb[0]);
   const g = parseInt(baseRgb[1]);
@@ -1174,37 +1117,30 @@ function drawEnergyDots(ctx, eVal, bodyR, color) {
     const x = ring * Math.cos(angle);
     const y = ring * Math.sin(angle);
     
-    // Vary dot size slightly with time for a pulsing effect
     const pulseRate = 0.4 + (i * 0.1);
     const pulseFactor = 1 + 0.2 * Math.sin(globalTime * pulseRate + i);
     const dotSize = dotBase * pulseFactor;
     
-    // Dot glow effect
     const glowSize = dotSize * 2.5;
-    const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowSize);
-    
-    // Energy color derived from base color but more vibrant
     const energyR = Math.min(255, r + 100);
     const energyG = Math.min(255, g + 50);
     const energyB = Math.min(255, b + 30);
     
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, glowSize);
     gradient.addColorStop(0, `rgba(${energyR}, ${energyG}, ${energyB}, 0.9)`);
     gradient.addColorStop(0.4, `rgba(${energyR}, ${energyG}, ${energyB}, 0.5)`);
     gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
     
-    // Draw glow
     ctx.beginPath();
     ctx.arc(x, y, glowSize, 0, 2 * Math.PI);
     ctx.fillStyle = gradient;
     ctx.fill();
     
-    // Draw energy dot
     ctx.beginPath();
     ctx.arc(x, y, dotSize, 0, 2 * Math.PI);
     ctx.fillStyle = `rgb(${energyR}, ${energyG}, ${energyB})`;
     ctx.fill();
     
-    // Add highlight to dot
     ctx.beginPath();
     ctx.arc(x - dotSize * 0.3, y - dotSize * 0.3, dotSize * 0.4, 0, 2 * Math.PI);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
@@ -1214,8 +1150,6 @@ function drawEnergyDots(ctx, eVal, bodyR, color) {
 
 function drawCrab(ctx, g, t, crabX, crabY) {
   const LC = CONFIG.LIMB_COUNT;
-  
-  // Get basic genes with Utils.GENE constants
   let rad = Utils.getGene(g, Utils.GENE.RADIUS);
   let el = Utils.getGene(g, Utils.GENE.ELONGATION);
   let ornt = Utils.getGene(g, Utils.GENE.ORIENT);
@@ -1223,49 +1157,37 @@ function drawCrab(ctx, g, t, crabX, crabY) {
   let amp = Utils.getGene(g, Utils.GENE.AMP);
   let sides = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.SIDES)), 3, 8);
   
-  // Get color genes
   let colR = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_R)), 0, 255);
   let colG = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_G)), 0, 255);
   let colB = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_B)), 0, 255);
   let color = `rgb(${colR},${colG},${colB})`;
   let energy = Utils.clamp(Utils.getGene(g, Utils.GENE.ENERGY), 0, 10);
   
-  // Get physical trait genes for visual representation
   let dragMod = Utils.getGene(g, Utils.GENE.DRAG_MOD);
   let rotDragMod = Utils.getGene(g, Utils.GENE.ROT_DRAG_MOD);
   let elasticity = Utils.getGene(g, Utils.GENE.ELASTICITY);
   let torqueEff = Utils.getGene(g, Utils.GENE.TORQUE_EFF);
   let powerRatio = Utils.getGene(g, Utils.GENE.POWER_RATIO);
-  
-  // Enhanced animation - add subtle breathing/pulsing motion
+
   let breathingFactor = 1.0 + 0.03 * Math.sin(t * 0.8);
   let wobbleFactor = 0.02 * Math.sin(t * 1.2);
   
-  // Create dynamic body rotation based on velocity and omega
   let bodyRotation = ornt + 0.07 * Math.sin(t * 0.5);
   
-  // Calculate distance to gravity center for glow effect
   let dx = W/2 - crabX;
   let dy = H/2 - crabY;
   let dist = Math.sqrt(dx*dx + dy*dy);
   let glowIntensity = 0;
-  
   if (dist < CONFIG.GRAVITY_FALLOFF) {
     glowIntensity = 0.4 * (1 - dist/CONFIG.GRAVITY_FALLOFF);
   }
   
-  // Modify body appearance based on drag coefficient (more streamlined = more elongated)
   let elongation = el * (0.8 + 0.4 * (1 - dragMod)) * breathingFactor;
   
-  // Create more interesting body shape - add slight wobble to vertices
   let verts = [];
   for (let i = 0; i < sides; i++) {
     let angle = bodyRotation + 2 * Math.PI * (i / sides);
-    
-    // Streamlined crabs have more regular shapes, bulky ones are more bumpy
     let radiusVariation = rad * (0.9 + 0.2 * Math.sin(angle * 3 + t * 0.5) * dragMod);
-    
-    // Add slight breathing effect
     let breathingRadius = radiusVariation * breathingFactor;
     
     verts.push({
@@ -1274,32 +1196,18 @@ function drawCrab(ctx, g, t, crabX, crabY) {
     });
   }
   
-  // Draw enhanced shadow with slight blur for depth
+  // Shadow
   ctx.save();
   ctx.translate(3, 3);
-  ctx.beginPath();
-  ctx.moveTo(verts[0].x, verts[0].y);
-  for (let i = 1; i < verts.length; i++) {
-    ctx.lineTo(verts[i].x, verts[i].y);
-  }
-  ctx.closePath();
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  fillPolygon(ctx, verts, "rgba(0,0,0,0.25)");
   ctx.shadowColor = "rgba(0,0,0,0.1)";
   ctx.shadowBlur = 5;
-  ctx.fill();
   ctx.restore();
   
-  // Enhanced water reflection effect when near gravity center
+  // Reflection from gravity center
   if (glowIntensity > 0) {
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(verts[0].x, verts[0].y);
-    for (let i = 1; i < verts.length; i++) {
-      ctx.lineTo(verts[i].x, verts[i].y);
-    }
-    ctx.closePath();
-    
-    // Create dynamic reflection based on distance to gravity
+    beginPolygonPath(ctx, verts);
     let reflectionColor = `rgba(255, 255, 255, ${glowIntensity * 0.5})`;
     ctx.shadowColor = reflectionColor;
     ctx.shadowBlur = 8;
@@ -1307,124 +1215,64 @@ function drawCrab(ctx, g, t, crabX, crabY) {
     ctx.globalCompositeOperation = 'lighter';
     ctx.fill();
     
-    // Add ripple effects around the crab
     const rippleCount = Math.floor(3 * glowIntensity);
     for (let i = 0; i < rippleCount; i++) {
       const rippleRadius = rad * (1.2 + 0.5 * i);
       const rippleOpacity = 0.1 * glowIntensity * (1 - i/rippleCount);
-      
       ctx.beginPath();
       ctx.arc(0, 0, rippleRadius, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(255, 255, 255, ${rippleOpacity})`;
       ctx.lineWidth = 1;
       ctx.stroke();
     }
-    
     ctx.restore();
   }
   
-  // Draw crab body with enhanced texturing
+  // Body fill
   ctx.save();
-  
-  // Create natural color variation based on genetics
-  // More elastic crabs have more vibrant colors
-  let colorIntensity = 0.8 + 0.4 * (elasticity - 0.8) / 0.4;
-  
-  // Create a subtle pattern/texture for the crab body
-  const patternCanvas = document.createElement('canvas');
-  const patternSize = Math.max(rad * 2, 100);
-  patternCanvas.width = patternSize;
-  patternCanvas.height = patternSize;
-  const patternCtx = patternCanvas.getContext('2d');
-  
-  // Draw base color
-  patternCtx.fillStyle = `rgb(${Math.min(255, colR * colorIntensity)},
-                             ${Math.min(255, colG * colorIntensity)},
-                             ${Math.min(255, colB * colorIntensity)})`;
-  patternCtx.fillRect(0, 0, patternSize, patternSize);
-  
-  // Add subtle pattern based on crab properties
-  const patternDensity = Math.min(30, sides * 4);
-  const patternOpacity = 0.1 + 0.1 * dragMod;
-  
-  for (let i = 0; i < patternDensity; i++) {
-    const px = Math.random() * patternSize;
-    const py = Math.random() * patternSize;
-    const patternElementSize = 2 + Math.random() * 4;
-    
-    patternCtx.beginPath();
-    patternCtx.arc(px, py, patternElementSize, 0, Math.PI * 2);
-    patternCtx.fillStyle = `rgba(${colR * 0.7}, ${colG * 0.7}, ${colB * 0.7}, ${patternOpacity})`;
-    patternCtx.fill();
+  beginPolygonPath(ctx, verts);
+
+  // Use the cached pattern if found
+  let thisCrab = null;
+  for (let c of population) {
+    if (c.genotype === g) {
+      thisCrab = c;
+      break;
+    }
   }
-  
-  // Create highlights on the texture
-  for (let i = 0; i < patternDensity/2; i++) {
-    const px = Math.random() * patternSize;
-    const py = Math.random() * patternSize;
-    const highlightSize = 1 + Math.random() * 2;
-    
-    patternCtx.beginPath();
-    patternCtx.arc(px, py, highlightSize, 0, Math.PI * 2);
-    patternCtx.fillStyle = `rgba(255, 255, 255, ${0.1 + 0.1 * elasticity})`;
-    patternCtx.fill();
+  if (thisCrab && thisCrab.pattern) {
+    ctx.fillStyle = thisCrab.pattern;
+  } else {
+    ctx.fillStyle = color;
   }
-  
-  // Apply the texture to the crab
-  const crabPattern = ctx.createPattern(patternCanvas, 'repeat');
-  
-  // Draw the body with the pattern
-  ctx.beginPath();
-  ctx.moveTo(verts[0].x, verts[0].y);
-  for (let i = 1; i < verts.length; i++) {
-    ctx.lineTo(verts[i].x, verts[i].y);
-  }
-  ctx.closePath();
-  
-  ctx.fillStyle = crabPattern;
   ctx.fill();
   
-  // Add a subtle gradient overlay for depth
+  // Subtle gradient overlay
   const gradientOverlay = ctx.createRadialGradient(0, 0, 0, 0, 0, rad * 1.5);
   gradientOverlay.addColorStop(0, `rgba(${colR}, ${colG}, ${colB}, 0.4)`);
   gradientOverlay.addColorStop(0.7, `rgba(${colR}, ${colG}, ${colB}, 0.1)`);
   gradientOverlay.addColorStop(1, 'rgba(0, 0, 0, 0)');
   
-  ctx.beginPath();
-  ctx.moveTo(verts[0].x, verts[0].y);
-  for (let i = 1; i < verts.length; i++) {
-    ctx.lineTo(verts[i].x, verts[i].y);
-  }
-  ctx.closePath();
-  
+  beginPolygonPath(ctx, verts);
   ctx.fillStyle = gradientOverlay;
   ctx.fill();
   
-  // Enhanced outline with variable width
-  const outlineWidth = 1.5 * (0.8 + 0.4 * dragMod);
-  ctx.lineWidth = outlineWidth;
-  ctx.strokeStyle = `rgba(20, 30, 40, 0.8)`;
-  ctx.stroke();
+  // Enhanced outline
+  strokePolygon(ctx, verts, 'rgba(20, 30, 40, 0.8)', 1.5 * (0.8 + 0.4 * dragMod));
   
-  // Add a subtle inner border for depth
-  ctx.lineWidth = outlineWidth * 0.5;
-  ctx.strokeStyle = `rgba(${colR * 0.5}, ${colG * 0.5}, ${colB * 0.5}, 0.3)`;
-  ctx.stroke();
-  
+  // Inner border
+  strokePolygon(ctx, verts, `rgba(${colR * 0.5}, ${colG * 0.5}, ${colB * 0.5}, 0.3)`, 1.5 * 0.5 * (0.8 + 0.4 * dragMod));
   ctx.restore();
   
-  // Collect genetic info for limb drawing
-  const geneInfo = { 
-    torqueEff, 
-    dragMod, 
-    elasticity, 
-    powerRatio 
-  };
-  
-  // Draw enhanced limbs
+  // Limbs
+  const geneInfo = { torqueEff, dragMod, elasticity, powerRatio };
   for (let i = 0; i < LC; i++) {
     let base = 3 + i * 5;
-    let bAng = g[base], bLen = g[base + 1], brA = g[base + 2], lRat = g[base + 3], ph = g[base + 4];
+    let bAng = g[base];
+    let bLen = g[base + 1];
+    let brA = g[base + 2];
+    let lRat = g[base + 3];
+    let ph = g[base + 4];
     let aFrac = g[45 + i];
     
     let cyc = freq * t + ph;
@@ -1435,82 +1283,57 @@ function drawCrab(ctx, g, t, crabX, crabY) {
     let angleC = Math.atan2(dy, dx);
     let rawAngle = angleC + bAng + swing;
     let delta = rawAngle - angleC;
-    
     if (delta < -CONFIG.LIMB_ANGLE_LIMIT) delta = -CONFIG.LIMB_ANGLE_LIMIT;
     if (delta > CONFIG.LIMB_ANGLE_LIMIT) delta = CONFIG.LIMB_ANGLE_LIMIT;
     let finalA = angleC + delta;
-    
+
     ctx.save();
     ctx.translate(dx, dy);
     ctx.rotate(finalA);
     
-    // Enhanced water disturbance effect with additional details
     if (Math.abs(swing) > 0.1) {
-      // Higher power ratio crabs create more disturbance
       let disturbIntensity = Math.min(0.2, 0.05 + Math.abs(swing) * 0.15 * powerRatio);
       ctx.shadowColor = `rgba(255, 255, 255, ${disturbIntensity})`;
       ctx.shadowBlur = 4;
     }
-    
-    // Draw enhanced limbs with genetics information
     drawBranch(ctx, bLen, brA, lRat, CONFIG.BRANCH_DEPTH, geneInfo);
     ctx.restore();
   }
-  
-  // Water ripples removed
-  
-  // Draw enhanced energy dots
+
   drawEnergyDots(ctx, energy, rad, color);
-  
-  // Add crab "eyes" or sensory organs if sides is at least 5
+
+  // Eyes
   if (sides >= 5) {
     const eyeDistance = rad * 0.6;
     const eyeSize = rad * 0.1;
     const eyeAngle = bodyRotation + Math.PI * 0.12;
     
-    // Left eye
     const leftEyeX = Math.cos(eyeAngle) * eyeDistance;
     const leftEyeY = Math.sin(eyeAngle) * eyeDistance * elongation;
-    
-    // Right eye
     const rightEyeX = Math.cos(-eyeAngle) * eyeDistance;
     const rightEyeY = Math.sin(-eyeAngle) * eyeDistance * elongation;
     
-    // Draw eyes with animation
     const eyePulse = 1 + 0.15 * Math.sin(t * 2);
-    
-    // Eye color based on energy level
     const eyeIntensity = 0.5 + 0.5 * (energy / 10);
     const eyeR = 20 + 40 * eyeIntensity;
     const eyeG = 80 + 60 * eyeIntensity;
     const eyeB = 120 + 80 * eyeIntensity;
     
-    // Helper function to draw an eye to avoid code duplication
     const drawEye = (x, y) => {
-      // Draw eye with glow
       ctx.beginPath();
       ctx.arc(x, y, eyeSize * eyePulse, 0, Math.PI * 2);
-      
-      const eyeGradient = ctx.createRadialGradient(
-        x, y, 0,
-        x, y, eyeSize * 2
-      );
-      
+      const eyeGradient = ctx.createRadialGradient(x, y, 0, x, y, eyeSize * 2);
       eyeGradient.addColorStop(0, `rgba(${eyeR}, ${eyeG}, ${eyeB}, 0.8)`);
       eyeGradient.addColorStop(0.5, `rgba(${eyeR}, ${eyeG}, ${eyeB}, 0.3)`);
       eyeGradient.addColorStop(1, 'rgba(0, 100, 200, 0)');
-      
       ctx.fillStyle = eyeGradient;
       ctx.fill();
       
-      // Eye pupil
       ctx.beginPath();
       ctx.arc(x, y, eyeSize * 0.4 * eyePulse, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(10, 20, 30, 0.9)`;
       ctx.fill();
     };
-    
-    // Draw both eyes using the helper function
     drawEye(leftEyeX, leftEyeY);
     drawEye(rightEyeX, rightEyeY);
   }
@@ -1518,14 +1341,9 @@ function drawCrab(ctx, g, t, crabX, crabY) {
 
 function drawWorld(){
   ctx.clearRect(0,0,W,H);
-  
-  // Draw dynamic nebula background
   drawNebulaBackground();
-  
-  // Draw gravity center
   drawGravityCenter();
   
-  // Draw collision effects behind crabs
   updateCollisionEffects();
   
   for(let crab of population){
@@ -1534,15 +1352,11 @@ function drawWorld(){
     ctx.translate(crab.x, crab.y);
     ctx.rotate(crab.orientation);
     
-    // Draw selection highlight first (under the crab) for selected crabs
     if(crab.selected){
       const radius = CONFIG.CRAB_RADIUS * 1.2;
-      
-      // Create animated glow effect
       const pulseRate = 0.7 + 0.3 * Math.sin(globalTime * 2);
       const glowRadius = radius * pulseRate;
       
-      // Draw outer glow
       const glowGradient = ctx.createRadialGradient(0, 0, radius * 0.5, 0, 0, glowRadius * 1.5);
       glowGradient.addColorStop(0, 'rgba(100, 255, 100, 0.4)');
       glowGradient.addColorStop(0.5, 'rgba(100, 255, 100, 0.2)');
@@ -1553,11 +1367,8 @@ function drawWorld(){
       ctx.fillStyle = glowGradient;
       ctx.fill();
       
-      // Draw selection ring
       ctx.beginPath();
       ctx.arc(0, 0, radius, 0, Math.PI * 2);
-      
-      // Animated gradient stroke for selection
       const dashLength = 15;
       const dashGap = 10;
       const dashOffset = globalTime * 30 % (dashLength + dashGap);
@@ -1568,7 +1379,6 @@ function drawWorld(){
       ctx.lineWidth = 3;
       ctx.stroke();
       
-      // Draw inner selection ring with opposite animation
       ctx.beginPath();
       ctx.arc(0, 0, radius * 0.85, 0, Math.PI * 2);
       ctx.setLineDash([dashLength * 0.7, dashGap * 0.7]);
@@ -1577,13 +1387,10 @@ function drawWorld(){
       ctx.lineWidth = 2;
       ctx.stroke();
       
-      // Reset dash settings
       ctx.setLineDash([]);
     }
     
-    // Draw the crab
     drawCrab(ctx, drawG, globalTime, crab.x, crab.y);
-    
     ctx.restore();
   }
 }
@@ -1594,12 +1401,11 @@ function drawGravityCenter() {
   const centerY = H/2;
   const radius = CONFIG.GRAVITY_RADIUS;
   
-  // Enhanced pulsing effect with multiple frequencies
   let primaryPulse = 1 + 0.12 * Math.sin(globalTime * CONFIG.GRAVITY_VISUAL_PULSE);
   let secondaryPulse = 1 + 0.08 * Math.sin(globalTime * CONFIG.GRAVITY_VISUAL_PULSE * 1.5);
   let pulseRadius = radius * primaryPulse;
   
-  // Create layered water vortex effect
+  // 3) FAVOR HIGHER-ORDER LOOPS FOR MULTIPLE LAYERS
   for (let i = 1; i <= 5; i++) {
     const layerOpacity = 0.12 / i;
     const layerWidth = 1 + (i === 1 ? 1.2 : 0);
@@ -1610,7 +1416,6 @@ function drawGravityCenter() {
     ctx.translate(centerX, centerY);
     ctx.rotate(rotationOffset);
     
-    // Draw a slightly deformed circle for more organic look
     ctx.beginPath();
     for (let a = 0; a < Math.PI * 2; a += 0.1) {
       const wavyRadius = layerRadius * (1 + 0.04 * Math.sin(a * 6 + globalTime * 0.2));
@@ -1631,89 +1436,72 @@ function drawGravityCenter() {
     ctx.restore();
   }
   
-  // Dynamic inner glow
   const glowSize = pulseRadius * 1.5 * secondaryPulse;
-  const gradientInner = ctx.createRadialGradient(
-    centerX, centerY, 0,
-    centerX, centerY, glowSize
-  );
   const hue = (220 + Math.sin(globalTime * 0.1) * 15);
   
-  gradientInner.addColorStop(0, `hsla(${hue}, 80%, 80%, 0.4)`);
-  gradientInner.addColorStop(0.3, `hsla(${hue}, 70%, 60%, 0.2)`);
-  gradientInner.addColorStop(0.7, `hsla(${hue - 20}, 60%, 40%, 0.1)`);
-  gradientInner.addColorStop(1, 'rgba(150, 200, 255, 0)');
-  
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, glowSize, 0, 2 * Math.PI);
-  ctx.fillStyle = gradientInner;
-  ctx.fill();
-  
-  // Bright center core
-  const coreSize = pulseRadius * 0.6;
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, coreSize, 0, 2 * Math.PI);
-  const coreGradient = ctx.createRadialGradient(
-    centerX, centerY, 0,
-    centerX, centerY, coreSize
+  const gradientInner = createRadialGradient(
+    ctx,
+    centerX, centerY,
+    0, 
+    glowSize,
+    [
+      { offset: 0, color: `hsla(${hue}, 80%, 80%, 0.4)` },
+      { offset: 0.3, color: `hsla(${hue}, 70%, 60%, 0.2)` },
+      { offset: 0.7, color: `hsla(${hue - 20}, 60%, 40%, 0.1)` },
+      { offset: 1, color: 'rgba(150, 200, 255, 0)' }
+    ]
   );
-  coreGradient.addColorStop(0, 'rgba(255, 255, 255, 0.7)');
-  coreGradient.addColorStop(0.6, 'rgba(200, 220, 255, 0.4)');
-  coreGradient.addColorStop(1, 'rgba(150, 180, 255, 0)');
-  ctx.fillStyle = coreGradient;
-  ctx.fill();
   
-  // Draw enhanced water current particles
+  fillArcWithGradient(ctx, centerX, centerY, glowSize, gradientInner);
+  
+  const coreSize = pulseRadius * 0.6;
+  const coreGradient = createRadialGradient(
+    ctx,
+    centerX, centerY,
+    0,
+    coreSize,
+    [
+      { offset: 0, color: 'rgba(255, 255, 255, 0.7)' },
+      { offset: 0.6, color: 'rgba(200, 220, 255, 0.4)' },
+      { offset: 1, color: 'rgba(150, 180, 255, 0)' }
+    ]
+  );
+  fillArcWithGradient(ctx, centerX, centerY, coreSize, coreGradient);
+  
   drawWaterCurrents(centerX, centerY, pulseRadius * 3);
 }
 
 /** Draw water current particles around the gravity center */
 function drawWaterCurrents(x, y, maxRadius) {
-  const particleCount = 40; // More particles for richer effect
-  
-  // Draw particle trails
+  const particleCount = 40;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   
   for (let i = 0; i < particleCount; i++) {
-    // Create swirling effect with time
     const orbitSpeed = 0.1 + (i % 5) * 0.02;
     const angle = (i / particleCount) * Math.PI * 2 + globalTime * orbitSpeed;
     
-    // Vary the orbit based on particle index
     const minRadius = maxRadius * 0.2;
     const radiusRange = maxRadius * 0.8;
     const orbitRadius = minRadius + radiusRange * ((Math.sin(globalTime * 0.1 + i * 0.2) + 1) / 2);
     
-    // Calculate position with slight wobble
     const wobble = Math.sin(globalTime * 0.5 + i) * 5;
     const px = x + Math.cos(angle) * (orbitRadius + wobble);
     const py = y + Math.sin(angle) * (orbitRadius + wobble);
     
-    // Vary particle sizes and create pulsing effect
     const baseSize = 0.8 + Math.sin(globalTime * 0.4 + i) * 0.5;
-    const size = baseSize * (1 - orbitRadius/maxRadius * 0.5); // Smaller as they get further
+    const size = baseSize * (1 - orbitRadius/maxRadius * 0.5);
     
-    // Create gradient to give particles a glow
-    const particleGradient = ctx.createRadialGradient(
-      px, py, 0,
-      px, py, size * 2
+    const particleGradient = createRadialGradient(
+      ctx, px, py,
+      0, size * 2,
+      [
+        { offset: 0, color: `hsla(${(200 + (i*10 + globalTime*5)) % 360}, 80%, 80%, ${0.4 - orbitRadius/maxRadius * 0.3})` },
+        { offset: 1, color: 'rgba(255, 255, 255, 0)' }
+      ]
     );
+    fillArcWithGradient(ctx, px, py, size * 2, particleGradient);
     
-    // Use a slight hue variation based on position and time
-    const hueShift = (i * 10 + globalTime * 5) % 60;
-    const baseHue = 200; // Blue base
-    const particleHue = baseHue + hueShift;
-    
-    particleGradient.addColorStop(0, `hsla(${particleHue}, 80%, 80%, ${0.4 - orbitRadius/maxRadius * 0.3})`);
-    particleGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    
-    ctx.beginPath();
-    ctx.arc(px, py, size * 2, 0, Math.PI * 2);
-    ctx.fillStyle = particleGradient;
-    ctx.fill();
-    
-    // Add tiny bright cores to the larger particles
     if (size > 1) {
       ctx.beginPath();
       ctx.arc(px, py, size * 0.5, 0, Math.PI * 2);
@@ -1721,28 +1509,22 @@ function drawWaterCurrents(x, y, maxRadius) {
       ctx.fill();
     }
   }
-  
   ctx.restore();
 }
 
-/** Draw a subtle water surface background effect */
+/** Subtle water surface background */
 function drawNebulaBackground() {
-  // Create a more rich underwater scene
   ctx.save();
   
-  // Draw subtle color variations in the water
   const deepWaterGradient = ctx.createLinearGradient(0, 0, 0, H);
   deepWaterGradient.addColorStop(0, 'rgba(30, 100, 180, 0.02)');
   deepWaterGradient.addColorStop(0.7, 'rgba(10, 60, 120, 0.04)');
   deepWaterGradient.addColorStop(1, 'rgba(5, 30, 80, 0.06)');
-  
   ctx.fillStyle = deepWaterGradient;
   ctx.fillRect(0, 0, W, H);
   
-  // Draw subtle light rays from surface
   const rayCount = 5;
   const rayWidth = W / rayCount;
-  
   ctx.globalCompositeOperation = 'lighter';
   
   for (let i = 0; i < rayCount; i++) {
@@ -1750,8 +1532,6 @@ function drawNebulaBackground() {
     const rayHeight = H * 0.7;
     const rayWidthTop = rayWidth * 0.2;
     const rayWidthBottom = rayWidth * 0.7;
-    
-    // Ray intensity varies with time
     const rayIntensity = 0.02 + 0.015 * Math.sin(globalTime * 0.1 + i);
     
     const rayGradient = ctx.createLinearGradient(xPos, 0, xPos, rayHeight);
@@ -1770,26 +1550,19 @@ function drawNebulaBackground() {
     ctx.fill();
   }
   
-  // Draw subtle horizontal wave patterns
   const waveCount = 3;
-  
   for (let i = 0; i < waveCount; i++) {
     const time = globalTime * 0.03 + i * Math.PI;
     const yBase = H * (0.3 + i * 0.25);
     
     ctx.beginPath();
     ctx.moveTo(0, yBase);
-    
-    // Create more complex and natural wave pattern
     for (let x = 0; x < W; x += 20) {
       const primaryWave = 10 * Math.sin((x / W) * Math.PI * 6 + time * 0.5);
       const secondaryWave = 5 * Math.sin((x / W) * Math.PI * 12 + time * 0.7);
       const y = yBase + primaryWave + secondaryWave;
-      
       ctx.lineTo(x, y);
     }
-    
-    // Add subtle gradient to waves
     const waveGradient = ctx.createLinearGradient(0, yBase - 15, 0, yBase + 15);
     waveGradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
     waveGradient.addColorStop(0.5, `rgba(255, 255, 255, ${0.03 - i * 0.005})`);
@@ -1800,15 +1573,10 @@ function drawNebulaBackground() {
     ctx.stroke();
   }
   
-  // Add floating particles mimicking suspended matter in water
   const floatingParticleCount = 20;
-  
   for (let i = 0; i < floatingParticleCount; i++) {
-    // Position varies with time
     const xPos = W * ((i / floatingParticleCount) + 0.2 * Math.sin(globalTime * 0.02 + i));
     const yPos = H * ((i % 5) / 5 + 0.1 * Math.cos(globalTime * 0.03 + i * 2));
-    
-    // Size varies with position
     const size = Math.max(0.5, 1.5 + Math.sin(xPos * 0.01) + Math.cos(yPos * 0.01));
     
     ctx.beginPath();
@@ -1835,6 +1603,7 @@ function onCanvasClick(e){
   }
   updateBreedButton();
 }
+
 function updateBreedButton(){
   let sel = population.filter(c => c.selected).length;
   let btn = document.getElementById("breedBtn");
@@ -1843,11 +1612,8 @@ function updateBreedButton(){
   if(sel >= 2){
     btn.style.display = "block";
     info.textContent = `Selected ${sel} crabs - Ready to breed!`;
-    
-    // Add subtle pulsing animation to breed button when active
     btn.style.animation = "pulseButton 1.5s infinite ease-in-out";
     
-    // Define the animation if it doesn't exist
     if (!document.querySelector("style").textContent.includes("@keyframes pulseButton")) {
       const styleSheet = document.createElement("style");
       styleSheet.textContent = `
@@ -1861,14 +1627,12 @@ function updateBreedButton(){
   } else if(sel === 1) {
     let crab = population.find(c => c.selected);
     if (crab) {
-      // Get genetic traits to display
       let dragMod = Utils.getFormattedGene(crab.genotype, Utils.GENE.DRAG_MOD);
       let rotDragMod = Utils.getFormattedGene(crab.genotype, Utils.GENE.ROT_DRAG_MOD);
       let elasticity = Utils.getFormattedGene(crab.genotype, Utils.GENE.ELASTICITY);
       let torqueEff = Utils.getFormattedGene(crab.genotype, Utils.GENE.TORQUE_EFF);
       let powerRatio = Utils.getFormattedGene(crab.genotype, Utils.GENE.POWER_RATIO);
       
-      // Display the genetic traits with enhanced formatting
       info.innerHTML = `
         <div style="font-weight:bold;margin-bottom:5px;color:#8CD5FF">Selected Crab Traits</div>
         <div style="display:grid;grid-template-columns:auto auto;gap:4px;font-size:0.85em">
