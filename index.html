@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BioCrabs: Interactive Aquatic Life Simulation with Evolving Creatures</title>
   <style>
     html, body {
       margin:0; padding:0;
@@ -198,10 +199,10 @@ const CONFIG = {
   COLLISION_TORQUE_FACTOR: 120.0,
   
   // whirlpool (gravity center) parameters
-  GRAVITY_STRENGTH: 0.1,
-  GRAVITY_RADIUS: 35,
+  GRAVITY_STRENGTH: 0.4,
+  GRAVITY_RADIUS: 45,
   GRAVITY_VISUAL_PULSE: 0.3,
-  GRAVITY_FALLOFF: 250,
+  GRAVITY_FALLOFF: 350,
   
   // Water spider movement parameters
   SURFACE_TENSION: 0.7,
@@ -757,16 +758,33 @@ function applyGravityForce(crab) {
   let gravityFactor = 1 - (dist / CONFIG.GRAVITY_FALLOFF);
   gravityFactor = Math.max(0, gravityFactor * gravityFactor);
   
+  // Add vortex/whirlpool effect - stronger closer to center
+  const vortexStrength = 0.3 * gravityFactor * gravityFactor;
+  const vortexAngle = Math.atan2(dy, dx) + Math.PI/2;
+  
+  let vortexFx = Math.cos(vortexAngle) * vortexStrength;
+  let vortexFy = Math.sin(vortexAngle) * vortexStrength;
+  
+  // Direct pull toward center
   let nx = dx / dist;
   let ny = dy / dist;
   
   crab._fx += nx * CONFIG.GRAVITY_STRENGTH * gravityFactor;
   crab._fy += ny * CONFIG.GRAVITY_STRENGTH * gravityFactor;
   
+  // Apply vortex forces
+  crab._fx += vortexFx;
+  crab._fy += vortexFy;
+  
+  // Apply torque to match the vortex spin direction
   let angleToCenter = Math.atan2(dy, dx);
   let angleDiff = angleToCenter - crab.orientation;
   angleDiff = (angleDiff + Math.PI) % (2 * Math.PI) - Math.PI;
-  crab._torque += 0.01 * Math.sin(angleDiff) * gravityFactor;
+  
+  // Add a spiraling spin effect
+  const spinTorque = 0.05 * gravityFactor * gravityFactor;
+  
+  crab._torque += 0.03 * Math.sin(angleDiff) * gravityFactor + spinTorque;
 }
 
 function handleCrabCollision(A, B) {
@@ -1405,9 +1423,9 @@ function drawGravityCenter() {
   let secondaryPulse = 1 + 0.08 * Math.sin(globalTime * CONFIG.GRAVITY_VISUAL_PULSE * 1.5);
   let pulseRadius = radius * primaryPulse;
   
-  // 3) FAVOR HIGHER-ORDER LOOPS FOR MULTIPLE LAYERS
+  // Original rings and glow
   for (let i = 1; i <= 5; i++) {
-    const layerOpacity = 0.12 / i;
+    const layerOpacity = 0.15 / i;
     const layerWidth = 1 + (i === 1 ? 1.2 : 0);
     const layerRadius = pulseRadius * i * (1.1 + (i * 0.05));
     const rotationOffset = globalTime * 0.05 * (i % 2 === 0 ? 1 : -1);
@@ -1445,9 +1463,9 @@ function drawGravityCenter() {
     0, 
     glowSize,
     [
-      { offset: 0, color: `hsla(${hue}, 80%, 80%, 0.4)` },
-      { offset: 0.3, color: `hsla(${hue}, 70%, 60%, 0.2)` },
-      { offset: 0.7, color: `hsla(${hue - 20}, 60%, 40%, 0.1)` },
+      { offset: 0, color: `hsla(${hue}, 80%, 80%, 0.5)` },
+      { offset: 0.3, color: `hsla(${hue}, 70%, 60%, 0.3)` },
+      { offset: 0.7, color: `hsla(${hue - 20}, 60%, 40%, 0.15)` },
       { offset: 1, color: 'rgba(150, 200, 255, 0)' }
     ]
   );
@@ -1461,8 +1479,8 @@ function drawGravityCenter() {
     0,
     coreSize,
     [
-      { offset: 0, color: 'rgba(255, 255, 255, 0.7)' },
-      { offset: 0.6, color: 'rgba(200, 220, 255, 0.4)' },
+      { offset: 0, color: 'rgba(255, 255, 255, 0.8)' },
+      { offset: 0.6, color: 'rgba(200, 220, 255, 0.5)' },
       { offset: 1, color: 'rgba(150, 180, 255, 0)' }
     ]
   );
