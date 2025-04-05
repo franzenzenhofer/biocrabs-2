@@ -533,6 +533,19 @@ export  function drawCrab(ctx, g, time, crabX, crabY, W, H, CONFIG, GENE, crab) 
     verts[i].y *= 1 + wobbleFactor * Math.cos(angle * sides);
   }
   
+  // --- OPTIMIZATION: Pre-calculate edge data for getAttach --- START ---
+  const edgeData = { edges: [], totalPerimeter: 0 };
+  for (let i = 0; i < verts.length; i++) {
+    const v1 = verts[i];
+    const v2 = verts[(i + 1) % verts.length];
+    const dx = v2.x - v1.x;
+    const dy = v2.y - v1.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    edgeData.edges.push({ v1, v2, dist });
+    edgeData.totalPerimeter += dist;
+  }
+  // --- OPTIMIZATION: Pre-calculate edge data for getAttach --- END ---
+  
   // Shadow
   ctx.save();
   ctx.translate(3, 3);
@@ -681,7 +694,39 @@ export  function drawCrab(ctx, g, time, crabX, crabY, W, H, CONFIG, GENE, crab) 
 
     const cyc = freq * time + ph;
     const swing = amp * Math.sin(cyc);
-    const att = getAttach(verts, aFrac);
+    
+    // --- OPTIMIZATION: Use pre-calculated edge data --- START ---
+    // Original: const att = getAttach(verts, aFrac);
+    
+    // Find attachment point using pre-calculated edge data
+    let att;
+    if (edgeData && edgeData.edges.length > 0) {
+      const targ = aFrac * edgeData.totalPerimeter;
+      let acc = 0;
+      let found = false;
+      for (const e of edgeData.edges) {
+        if (acc + e.dist >= targ) {
+          const leftover = targ - acc;
+          // Avoid division by zero if dist is somehow 0
+          const portion = e.dist > 0 ? leftover / e.dist : 0;
+          att = {
+            x: e.v1.x + portion * (e.v2.x - e.v1.x),
+            y: e.v1.y + portion * (e.v2.y - e.v1.y)
+          };
+          found = true;
+          break;
+        }
+        acc += e.dist;
+      }
+      if (!found) {
+        att = edgeData.edges[0].v1; // Fallback to first vertex
+      }
+    } else {
+      // Fallback to original getAttach if edgeData is somehow invalid
+      att = getAttach(verts, aFrac);
+    }
+    // --- OPTIMIZATION: Use pre-calculated edge data --- END ---
+    
     const dx = att.x;
     const dy_attach = att.y; // Rename to avoid conflict
     const angleC = Math.atan2(dy_attach, dx);
@@ -814,7 +859,11 @@ export function drawGravityCenter(ctx, W, H, CONFIG, time) {
       ctx.rotate(rotationOffset);
   
       ctx.beginPath();
-      for (let a = 0; a < Math.PI * 2; a += 0.1) {
+      // --- OPTIMIZATION: Increase step size to reduce points --- START ---
+      // Original: for (let a = 0; a < Math.PI * 2; a += 0.1) {
+      // Use larger step size for simpler paths
+      for (let a = 0; a < Math.PI * 2; a += 0.2) {
+      // --- OPTIMIZATION: Increase step size to reduce points --- END ---
         const wavyRadius = getGravityCenterWavyRadius(layerRadius, a, time);
         const x = Math.cos(a) * wavyRadius;
         const y = Math.sin(a) * wavyRadius;

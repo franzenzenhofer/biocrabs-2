@@ -69,6 +69,28 @@ export const getGene = (genotype, gene, fallback = 1.0) => {
 };
 
 /**
+ * Get a cached gene value, using entity's _geneCache if available.
+ * If the cache doesn't exist or the gene isn't cached, computes and caches the value.
+ * This significantly improves performance by avoiding repeated lookups.
+ */
+export const getCachedGene = (entity, geneIndex, fallback = 1.0) => {
+  // If entity has a gene cache and the requested gene is cached, return it
+  if (entity._geneCache && entity._geneCache[geneIndex] !== undefined) {
+    return entity._geneCache[geneIndex];
+  }
+  
+  // If no cache exists or the gene isn't cached, get it using getGene
+  const value = getGene(entity.genotype, geneIndex, fallback);
+  
+  // Store in cache if cache exists
+  if (entity._geneCache) {
+    entity._geneCache[geneIndex] = value;
+  }
+  
+  return value;
+};
+
+/**
  * Get a formatted gene value (rounded to 2 decimal places).
  */
 export const getFormattedGene = (genotype, gene, fallback = 1.0) => {

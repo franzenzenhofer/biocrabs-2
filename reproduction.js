@@ -279,9 +279,10 @@ export const triggerReproduction = (parentA, parentB, CONFIG, GENE, /* REMOVED p
       _fy: 0,
       _torque: 0,
       _inertia: 1, // Default inertia, will be recalculated later
-      _currentThrust: 0 // CRITICAL: Initialize thrust to prevent NaN
+      _currentThrust: 0, // CRITICAL: Initialize thrust to prevent NaN
       // ***** END ROOT CAUSE FIX *****
       // *******************************************************
+      _geneCache: {}, // Add gene cache for performance optimization
     };
 
     // --- REMOVED Initialization from here, it's now inside the object literal ---

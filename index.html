@@ -24,7 +24,8 @@ import {
   getPolyVerts,
   getAttach,
   getGene,
-  getFormattedGene
+  getFormattedGene,
+  getCachedGene
 } from './util.js';
 
 import {
@@ -104,24 +105,16 @@ const CONFIG = {
   MAX_ENERGY: 100,             // Max energy capacity
   BASE_ENERGY: 75,             // Starting energy for initial population
   BASAL_METABOLISM_COST: 0.05, // Constant energy drain per time step (Increased from 0.02)
-  THRUST_ENERGY_COST: 0.35,   // Energy cost per unit of thrust per time step (Increased from 0.005 -> 0.02 -> 0.0
-  // 35)
-  MAX_FOOD: 40,                // Max food pellets on screen
+  THRUST_ENERGY_COST: 0.20,    // Energy cost per unit of thrust per time step
   FOOD_SPAWN_RATE: 0.1,        // Chance to spawn food each frame
   FOOD_RADIUS: 5,
-  FOOD_ENERGY_VALUE: 20,       // Energy gained from eating food (Decreased from 25)
+  FOOD_ENERGY_VALUE: 20,       // Energy gained from eating food
   REPRO_ENERGY_THRESHOLD: 60,  // Minimum energy needed to reproduce
-  REPRODUCTION_ENERGY_COST: 55,// Obsolete: Actual cost is now MAX_ENERGY / 2 per parent (see reproduction.js)
-  OFFSPRING_START_ENERGY: 100,  // Obsolete: Offspring now start with MAX_ENERGY (see reproduction.js)
 
   // --- Target Energy for Stabilization ---
   TARGET_SYSTEM_ENERGY: 1000,  // Target total energy for the system
 
-  // --- REMOVED Old/Static Energy Configs ---
-  // ENERGY_GENE_FACTOR: 8,
-  // MAX_EFFECTIVE_REPRO_ENERGY: 300,
-  // MIN_REPRO_PROB: 1,
-  // MAX_REPRO_PROB: 1,
+ 
 };
 
 /***********************************************************************
@@ -170,10 +163,8 @@ window.addEventListener('load', () => {
     console.log("Desktop configuration activated.");
     // Override values for desktop screens
     CONFIG.TARGET_SYSTEM_ENERGY = 4000;  // Higher target for larger screens
-    CONFIG.MAX_FOOD = 70;                // More food for larger area
-    CONFIG.FOOD_SPAWN_RATE = 0.12;       // Slightly faster spawn rate
-    // Optional: CONFIG.FOOD_ENERGY_VALUE = 25; // More valuable food
-    Optional: CONFIG.POP_SIZE = 15;          // Larger initial population
+    CONFIG.POP_SIZE = 15;                // Larger initial population
+    CONFIG.FOOD_SPAWN_RATE = 0.12;       // Slightly faster spawn rate for larger area
 
     // Adjust initial environment energy to match the new target
     environmentEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
@@ -234,6 +225,7 @@ function initPopulation() {
       selected: false,
       energy: CONFIG.BASE_ENERGY,
       markedForCulling: false,
+      _geneCache: {}, // Add an empty gene cache object
     };
     // Initialize physics cache properties defensively
     crab._fx = 0;
@@ -245,15 +237,15 @@ function initPopulation() {
     population.push(crab);
   }
 
-  // Spawn initial food
-  for (let i = 0; i < CONFIG.MAX_FOOD * 0.75; i++) {
-    // Call the modified spawn function, deducting energy
-    if (foodPellets.length < CONFIG.MAX_FOOD) {
-       spawnFoodPellet(CONFIG.FOOD_ENERGY_VALUE);
-    }
+  // Calculate initial max food based on target energy
+  const targetEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
+  const initialMaxFood = Math.floor(targetEnergy / (CONFIG.FOOD_ENERGY_VALUE * 2));
+  
+  // Spawn initial food (around 75% of calculated max)
+  const initialFoodCount = Math.floor(initialMaxFood * 0.75);
+  for (let i = 0; i < initialFoodCount; i++) {
+    spawnFoodPellet(CONFIG.FOOD_ENERGY_VALUE, initialMaxFood);
   }
-
-  // updateInfoPanel(); // Removed: UI updates handled by initUI
 }
 
 /***********************************************************************
@@ -335,13 +327,13 @@ function applyLimbForces(crab) {
   crab._torque = 0;
   crab._currentThrust = 0;
 
-  const rad = getGene(crab.genotype, GENE.RADIUS);
+  const rad = getCachedGene(crab, GENE.RADIUS);
   crab._inertia = 1 + CONFIG.INERTIA_FACTOR * (rad * rad);
 
-  const freq = getGene(crab.genotype, GENE.FREQ);
-  const amp = getGene(crab.genotype, GENE.AMP);
-  const powerRatio = getGene(crab.genotype, GENE.POWER_RATIO);
-  const torqueEfficiency = getGene(crab.genotype, GENE.TORQUE_EFF);
+  const freq = getCachedGene(crab, GENE.FREQ);
+  const amp = getCachedGene(crab, GENE.AMP);
+  const powerRatio = getCachedGene(crab, GENE.POWER_RATIO);
+  const torqueEfficiency = getCachedGene(crab, GENE.TORQUE_EFF);
 
   const pulsePhase = (globalTime % CONFIG.PULSE_INTERVAL) / CONFIG.PULSE_INTERVAL;
   const pulseFactor = Math.sin(pulsePhase * Math.PI) ** 2;
@@ -395,8 +387,8 @@ function applyLimbForces(crab) {
 }
 
 function applyQuadraticDrag(crab) {
-  const dragMod = getGene(crab.genotype, GENE.DRAG_MOD);
-  const rotDragMod = getGene(crab.genotype, GENE.ROT_DRAG_MOD);
+  const dragMod = getCachedGene(crab, GENE.DRAG_MOD);
+  const rotDragMod = getCachedGene(crab, GENE.ROT_DRAG_MOD);
   const vx = crab.vx;
   const vy = crab.vy;
   const s2 = vx * vx + vy * vy;
@@ -465,8 +457,8 @@ function handleCrabCollision(A, B, offspringAccumulator) {
   const dx = B.x - A.x;
   const dy = B.y - A.y;
   const distSq = dx * dx + dy * dy;
-  const radiusA = getGene(A.genotype, GENE.RADIUS);
-  const radiusB = getGene(B.genotype, GENE.RADIUS);
+  const radiusA = getCachedGene(A, GENE.RADIUS);
+  const radiusB = getCachedGene(B, GENE.RADIUS);
   const minDist = radiusA + radiusB;
   if (distSq >= minDist * minDist) return;
 
@@ -479,8 +471,8 @@ function handleCrabCollision(A, B, offspringAccumulator) {
   const rvy = B.vy - A.vy;
   const approach = rvx * nx + rvy * ny;
   if (approach < 0) {
-    const elasticityA = getGene(A.genotype, GENE.ELASTICITY);
-    const elasticityB = getGene(B.genotype, GENE.ELASTICITY);
+    const elasticityA = getCachedGene(A, GENE.ELASTICITY);
+    const elasticityB = getCachedGene(B, GENE.ELASTICITY);
     const avgElasticity = (elasticityA + elasticityB) / 2;
     const e = CONFIG.RESTITUTION * avgElasticity;
     let j = -(1 + e) * approach * 0.5;
@@ -598,7 +590,7 @@ function integrateCrab(crab) {
   // --- Pre-Integration Checks --- END
 
   const dt = CONFIG.TIME_STEP;
-  let torque = crab._torque * CONFIG.TORQUE_MULTIPLIER * getGene(crab.genotype, GENE.TORQUE_EFF);
+  let torque = crab._torque * CONFIG.TORQUE_MULTIPLIER * getCachedGene(crab, GENE.TORQUE_EFF);
   const speedFactor = Math.min(1, Math.sqrt(crab.vx * crab.vx + crab.vy * crab.vy) / 10);
   torque *= 0.7 + 0.3 * speedFactor;
   let alpha = torque / (crab._inertia || 1);
@@ -674,7 +666,7 @@ function integrateCrab(crab) {
 
 function handleWallCollision(crab) {
   let e = CONFIG.RESTITUTION;
-  const elasticity = getGene(crab.genotype, GENE.ELASTICITY);
+  const elasticity = getCachedGene(crab, GENE.ELASTICITY);
   const waterEdgeEffect = 0.7;
   e *= waterEdgeEffect * elasticity;
 
@@ -729,15 +721,21 @@ function handleWallCollision(crab) {
 /***********************************************************************
  * FOOD & ENERGY
  ***********************************************************************/
-function spawnFoodPellet(energyValue, currentFoodCap = CONFIG.MAX_FOOD) {
+function spawnFoodPellet(energyValue, maxFoodOverride) {
   // Check if enough environment energy exists
   if (environmentEnergy < energyValue) {
-    // Optional: Log low energy state if helpful
-    // console.log(`Insufficient environment energy (${environmentEnergy}) to spawn food pellet (${energyValue}).`);
     return false; // Cannot spawn food, return false
   }
-  // Use the provided or default food cap
-  if (foodPellets.length < currentFoodCap) { 
+  
+  // Calculate max food based on current system energy and target
+  const targetEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
+  const baseMaxFood = Math.floor(targetEnergy / (CONFIG.FOOD_ENERGY_VALUE * 2));
+  
+  // Use override if provided, otherwise use calculated value
+  const maxFood = maxFoodOverride || baseMaxFood;
+  
+  // Check if we're below the cap
+  if (foodPellets.length < maxFood) { 
     environmentEnergy -= energyValue; // Consume energy from environment
     foodPellets.push({
       x: rand(CONFIG.FOOD_RADIUS, W - CONFIG.FOOD_RADIUS),
@@ -753,96 +751,82 @@ function updateFoodAndEating() {
     // --- Calculate Current Total System Energy ---
     const totalCrabEnergy = population.reduce((sum, c) => sum + (c && typeof c.energy === 'number' && !isNaN(c.energy) ? c.energy : 0), 0);
     const totalPelletEnergy = foodPellets.reduce((sum, f) => sum + (f && typeof f.energyValue === 'number' ? f.energyValue : 0), 0);
-    // Ensure environmentEnergy itself is not NaN before including it
     const safeEnvironmentEnergy = (typeof environmentEnergy === 'number' && !isNaN(environmentEnergy)) ? environmentEnergy : 0;
     const currentTotalSystemEnergy = totalCrabEnergy + totalPelletEnergy + safeEnvironmentEnergy;
 
-    // --- Safeguard Logic ---
+    // --- Dynamic Food Cap Calculation ---
     const targetEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
-    const lowerThreshold = targetEnergy * 0.95; // e.g., 95% of target
-    const upperThreshold = targetEnergy * 1.05; // e.g., 105% of target
-    const foodEnergyValue = CONFIG.FOOD_ENERGY_VALUE; // Cache for clarity
+    const baseMaxFood = Math.floor(targetEnergy / (CONFIG.FOOD_ENERGY_VALUE * 2));
+    const energyRatio = currentTotalSystemEnergy / targetEnergy;
+    
+    // Adjust max food inversely with energy ratio
+    const dynamicMaxFood = Math.floor(baseMaxFood * (1.2 - (energyRatio > 1 ? 0.4 : 0)));
+    
+    // --- Safeguard Logic ---
+    const lowerThreshold = targetEnergy * 0.95;
+    const upperThreshold = targetEnergy * 1.05;
+    const foodEnergyValue = CONFIG.FOOD_ENERGY_VALUE;
 
     let allowRandomSpawn = true;
 
     if (currentTotalSystemEnergy < lowerThreshold) {
         // System energy is LOW - try to ADD pellets
-        console.warn(`Safeguard (LOW): System energy ${currentTotalSystemEnergy.toFixed(1)} is below threshold ${lowerThreshold.toFixed(1)}. Attempting to add pellets.`); // Changed to warn for visibility
         const pelletsToAdd = 2;
         let pelletsAdded = 0;
-        const slightlyExpandedCap = CONFIG.MAX_FOOD + 5; // Allow slightly exceeding max
+        const emergencyMaxFood = dynamicMaxFood + 5; 
 
         for (let i = 0; i < pelletsToAdd; i++) {
-            if (foodPellets.length >= slightlyExpandedCap) {
-                 console.warn(`Safeguard (LOW): Reached expanded food cap (${slightlyExpandedCap}). Cannot add more pellets.`);
-                 break; // Stop if we hit the expanded cap
+            if (foodPellets.length >= emergencyMaxFood) {
+                break;
             }
 
-            // *** Safeguard Energy Injection Logic ***
             if (safeEnvironmentEnergy >= foodEnergyValue) {
-                // Environment has energy - use normal spawn (deducts energy)
-                if (spawnFoodPellet(foodEnergyValue, slightlyExpandedCap)) {
+                // Environment has energy - use normal spawn
+                if (spawnFoodPellet(foodEnergyValue, emergencyMaxFood)) {
                     pelletsAdded++;
-                } else {
-                     // This might happen if env energy becomes < cost *during* the loop
-                     console.warn(`Safeguard (LOW): spawnFoodPellet failed even though initial check passed (Env: ${safeEnvironmentEnergy.toFixed(1)}, Cost: ${foodEnergyValue}).`);
                 }
             } else {
                 // Environment is EMPTY - FORCE add pellet (inject energy)
-                console.warn(`Safeguard (LOW): Environment energy (${safeEnvironmentEnergy.toFixed(1)}) too low. Force-spawning pellet (injecting ${foodEnergyValue} energy).`);
                 foodPellets.push({
                     x: rand(CONFIG.FOOD_RADIUS, W - CONFIG.FOOD_RADIUS),
                     y: rand(CONFIG.FOOD_RADIUS, H - CONFIG.FOOD_RADIUS),
                     energyValue: foodEnergyValue
                 });
-                // DO NOT deduct from environmentEnergy here
                 pelletsAdded++;
-                // Since we injected energy, update the 'safe' value for subsequent checks in this loop if needed, though it's unlikely needed now.
-                // safeEnvironmentEnergy remains low/zero.
             }
         }
-         if (pelletsAdded > 0) {
-            console.warn(`Safeguard (LOW): Added ${pelletsAdded} pellets.`);
-        }
-        // Allow normal random spawning as well, as the system is low
         allowRandomSpawn = true;
-
     } else if (currentTotalSystemEnergy > upperThreshold) {
-        // System energy is HIGH - STOP adding pellets via random spawn
-        // console.log(`Safeguard (HIGH): System energy ${currentTotalSystemEnergy.toFixed(1)} is above threshold ${upperThreshold.toFixed(1)}. Preventing random pellet spawn.`); // Less noisy log
-        allowRandomSpawn = false; // Prevent random spawn
+        // System energy is HIGH - STOP adding pellets
+        allowRandomSpawn = false;
     }
 
-    // --- Normal Random Food Spawning (Conditional) ---
-    if (allowRandomSpawn && foodPellets.length < CONFIG.MAX_FOOD && Math.random() < CONFIG.FOOD_SPAWN_RATE) {
-        // Use normal spawn function with default cap, which requires environment energy
-        spawnFoodPellet(foodEnergyValue); // Don't pass expanded cap here
+    // --- Normal Random Food Spawning ---
+    if (allowRandomSpawn && foodPellets.length < dynamicMaxFood && Math.random() < CONFIG.FOOD_SPAWN_RATE) {
+        spawnFoodPellet(foodEnergyValue, dynamicMaxFood);
     }
 
-    // --- Eating Logic (Remains the same) ---
-     for (let i = population.length - 1; i >= 0; i--) {
+    // --- Eating Logic ---
+    for (let i = population.length - 1; i >= 0; i--) {
         const crab = population[i];
-        // Add NaN check for crab energy before potentially adding to it
         if (!crab || typeof crab.energy !== 'number' || isNaN(crab.energy)) continue;
         for (let j = foodPellets.length - 1; j >= 0; j--) {
-          const food = foodPellets[j];
-           // Basic check for valid food object and energy value
-          if (!food || typeof food.energyValue !== 'number' || isNaN(food.energyValue)) continue;
+            const food = foodPellets[j];
+            if (!food || typeof food.energyValue !== 'number' || isNaN(food.energyValue)) continue;
 
-          const dx = crab.x - food.x;
-          const dy = crab.y - food.y;
-          const distSq = dx * dx + dy * dy;
-          const collideDist = getGene(crab.genotype, GENE.RADIUS) + CONFIG.FOOD_RADIUS;
-          if (distSq < collideDist * collideDist) {
-            // Transfer energy from pellet to crab
-            crab.energy += food.energyValue; // Use pellet's specific energy value
-            crab.energy = Math.min(crab.energy, CONFIG.MAX_ENERGY); // Clamp
-            foodPellets.splice(j, 1);
-            // REMOVED: Food eating effect
-            break;
-          }
+            const dx = crab.x - food.x;
+            const dy = crab.y - food.y;
+            const distSq = dx * dx + dy * dy;
+            const collideDist = getCachedGene(crab, GENE.RADIUS) + CONFIG.FOOD_RADIUS;
+            if (distSq < collideDist * collideDist) {
+                // Transfer energy from pellet to crab
+                crab.energy += food.energyValue;
+                crab.energy = Math.min(crab.energy, CONFIG.MAX_ENERGY);
+                foodPellets.splice(j, 1);
+                break;
+            }
         }
-      }
+    }
 }
 
 function handleDeathsAndCulling() {
@@ -874,58 +858,39 @@ function handleDeathsAndCulling() {
 function mainLoop() {
   globalTime += CONFIG.TIME_STEP;
 
-  // --- Clear Canvas First --- (Moved from drawWorld)
+  // Clear canvas
   ctx.clearRect(0, 0, W, H);
-  // -------------------------
 
   updateFoodAndEating();
-  updateMovement(population); // Handles adding offspring & triggering birth effects
-  handleDeathsAndCulling();   // Triggers death effects
+  updateMovement(population);
+  handleDeathsAndCulling();
 
-  // Draw World Background and Static Elements (modified drawWorld will do this)
+  // Draw World and all entities
   drawWorld(ctx, W, H, CONFIG, GENE, globalTime, foodPellets, population);
 
-  // Update and Draw Collision Effects
-  updateCollisionEffects(ctx, CONFIG.TIME_STEP); // Pass timeStep
-
-  // Update and Draw Life Cycle Effects (NEW)
-  // Pass dependencies needed by updateLifeCycleEffects
+  // Update and Draw effects
+  updateCollisionEffects(ctx, CONFIG.TIME_STEP);
   updateLifeCycleEffects(ctx, CONFIG.TIME_STEP, GENE, getGene, getPolyVerts);
 
-  // Draw Crabs, Food etc. (drawWorld already did this, maybe refactor drawWorld?)
-  // For now, drawWorld handles everything. If layering becomes an issue,
-  // we might need to split drawWorld into background/foreground parts.
-
-  // --- Optional Debugging Functions --- START
-  function getTotalCrabEnergy() {
-    return population.reduce((sum, c) => sum + (c && typeof c.energy === 'number' ? c.energy : 0), 0);
+  // --- Energy Stats Logging ---
+  if (Math.random() < 0.02) { // Log every ~50 frames
+    const totalCrabEnergy = population.reduce((sum, c) => sum + (c && typeof c.energy === 'number' ? c.energy : 0), 0);
+    const totalPelletEnergy = foodPellets.reduce((sum, f) => sum + (f && typeof f.energyValue === 'number' ? f.energyValue : 0), 0);
+    const safeEnvEnergy = (typeof environmentEnergy === 'number' && !isNaN(environmentEnergy)) ? environmentEnergy : 0;
+    const totalSystemEnergy = totalCrabEnergy + totalPelletEnergy + safeEnvEnergy;
+    
+    // Calculate dynamic food cap
+    const targetEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
+    const baseMaxFood = Math.floor(targetEnergy / (CONFIG.FOOD_ENERGY_VALUE * 2));
+    const energyRatio = totalSystemEnergy / targetEnergy;
+    const dynamicMaxFood = Math.floor(baseMaxFood * (1.2 - (energyRatio > 1 ? 0.4 : 0)));
+    
+    console.log(
+      `Energy: ${totalSystemEnergy.toFixed(0)}/${targetEnergy} (${(totalSystemEnergy/targetEnergy*100).toFixed(0)}%) | ` +
+      `Env: ${safeEnvEnergy.toFixed(0)} | Crabs: ${totalCrabEnergy.toFixed(0)} | ` + 
+      `Pellets: ${totalPelletEnergy.toFixed(0)} (${foodPellets.length}/${dynamicMaxFood})`
+    );
   }
-  function getTotalPelletEnergy() {
-    return foodPellets.reduce((sum, f) => sum + (f && typeof f.energyValue === 'number' ? f.energyValue : 0), 0);
-  }
-  // --- Optional Debugging Functions --- END
-
-  // --- Optional Debugging Log --- START
-  const totalCrabE = getTotalCrabEnergy();
-  const totalPelletE = getTotalPelletEnergy();
-  // Use the safe value here too
-  const safeEnvE = (typeof environmentEnergy === 'number' && !isNaN(environmentEnergy)) ? environmentEnergy : 0;
-  const totalSystemEnergy = totalCrabE + totalPelletE + safeEnvE;
-  // Define thresholds here too for the log message
-  const targetEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
-  const lowerThreshold = targetEnergy * 0.95;
-  const upperThreshold = targetEnergy * 1.05;
-  // Log less frequently to avoid spamming console
-  if (Math.random() < 0.01) { // Log roughly 1% of frames
-      console.log(
-          `Total Energy: ${totalSystemEnergy.toFixed(2)} (Env: ${safeEnvE.toFixed(2)}, Crabs: ${totalCrabE.toFixed(2)}, Pellets: ${totalPelletE.toFixed(2)})`
-      );
-       // Also log if safeguard is active
-       if (totalSystemEnergy < lowerThreshold || totalSystemEnergy > upperThreshold) {
-           console.log(`--- Safeguard potentially active ---`);
-       }
-  }
-  // --- Optional Debugging Log --- END
 
   requestAnimationFrame(mainLoop);
 }
@@ -933,3 +898,5 @@ function mainLoop() {
 </script>
 </body>
 </html>
+
+

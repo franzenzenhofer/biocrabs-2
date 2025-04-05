@@ -62,7 +62,11 @@ export const createCollisionEffect = (
   const lifespan = calculatedLifespan;
 
   // Particle effect (common for "most" collisions)
-  const particleCount = Math.floor(3 + safeIntensity * 0.5); // Use safeIntensity
+  // --- OPTIMIZATION: Reduce particle count for performance ---
+  // Original: const particleCount = Math.floor(3 + safeIntensity * 0.5);
+  // Use a smaller multiplier to reduce the number of particles
+  const particleCount = Math.floor(2 + safeIntensity * 0.3); 
+  // --- END OPTIMIZATION ---
   for (let i = 0; i < particleCount; i++) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 1 + Math.random() * 2 * safeIntensity; // Use safeIntensity
@@ -86,8 +90,12 @@ export const createCollisionEffect = (
   collisionEffects.push({
     x,
     y,
-    size: size * 0.5,
-    maxSize: size * 3,
+    // --- OPTIMIZATION: Reduce ripple size for performance ---
+    // Original: size: size * 0.5, maxSize: size * 3
+    // Use smaller multipliers to reduce the visual complexity
+    size: size * 0.4,
+    maxSize: size * 2.5,
+    // --- END OPTIMIZATION ---
     life: lifespan,
     maxLife: lifespan,
     type: 'ripple',
