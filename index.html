@@ -262,19 +262,32 @@ function updateMovement(population) {
     applyQuadraticDrag(crab);
     applyGravityForce(crab);
   }
+  
+  // --- Spatial optimization: sort by x-position ---
+  population.sort((a, b) => a.x - b.x);
+  
   for (let i = 0; i < population.length; i++) {
     const crabA = population[i];
     // Skip if crabA is somehow invalid (defensive)
-    if (!crabA) continue; 
+    if (!crabA) continue;
+    
+    const radiusA = getCachedGene(crabA, GENE.RADIUS);
+    
     for (let j = i + 1; j < population.length; j++) {
       const crabB = population[j];
       // Skip if crabB is somehow invalid (defensive)
-      if (!crabB) continue; 
+      if (!crabB) continue;
+      
+      const radiusB = getCachedGene(crabB, GENE.RADIUS);
+      
+      // Early termination: if crabB is too far right, we can skip all remaining crabs
+      if (crabB.x - radiusB > crabA.x + radiusA) break;
 
       // Pass accumulator array for offspring
       handleCrabCollision(crabA, crabB, newOffspringThisFrame);
     }
   }
+  
   for (const crab of population) {
     integrateCrab(crab);
     handleWallCollision(crab);
@@ -297,26 +310,6 @@ function updateMovement(population) {
       }
       newOffspringThisFrame = []; // Clear for next frame (already done)
   }
-  // Culling logic removed - handleDeathsAndCulling handles energy death.
-  /*
-  // Remove culled crabs
-  if (indicesToCullThisFrame.size > 0) {
-      let validCrabsRemoved = 0;
-      for (let i = population.length - 1; i >= 0; i--) {
-          if (indicesToCullThisFrame.has(i)) {
-              if (population[i] && population[i].genotype) {
-                  population.splice(i, 1);
-                  validCrabsRemoved++;
-              } else {
-                  console.warn(`Deferred cull: Attempted to cull invalid crab at index ${i}. Skipping removal.`);
-              }
-          }
-      }
-      // Optional check
-      // if (validCrabsRemoved !== expectedCullCount) { ... }
-      indicesToCullThisFrame.clear(); // Clear for next frame
-  }
-  */
   // --- Apply Deferred Population Changes --- END
 }
 
@@ -454,93 +447,103 @@ function applyGravityForce(crab) {
 }
 
 function handleCrabCollision(A, B, offspringAccumulator) {
-  const dx = B.x - A.x;
-  const dy = B.y - A.y;
-  const distSq = dx * dx + dy * dy;
+  // --- BROAD PHASE: Simple AABB (box) collision detection ---
   const radiusA = getCachedGene(A, GENE.RADIUS);
   const radiusB = getCachedGene(B, GENE.RADIUS);
-  const minDist = radiusA + radiusB;
-  if (distSq >= minDist * minDist) return;
+  
+  // Check if bounding boxes intersect (fast check)
+  if (!(A.x + radiusA < B.x - radiusB || 
+        A.x - radiusA > B.x + radiusB || 
+        A.y + radiusA < B.y - radiusB || 
+        A.y - radiusA > B.y + radiusB)) {
+    
+    // --- NARROW PHASE: Precise circle collision detection ---
+    const dx = B.x - A.x;
+    const dy = B.y - A.y;
+    const distSq = dx * dx + dy * dy;
+    const minDist = radiusA + radiusB;
+    if (distSq >= minDist * minDist) return;
 
-  const dist = Math.sqrt(distSq) || 0.0001;
-  const overlap = minDist - dist;
-  const nx = dx / dist;
-  const ny = dy / dist;
+    const dist = Math.sqrt(distSq) || 0.0001;
+    const overlap = minDist - dist;
+    const nx = dx / dist;
+    const ny = dy / dist;
 
-  const rvx = B.vx - A.vx;
-  const rvy = B.vy - A.vy;
-  const approach = rvx * nx + rvy * ny;
-  if (approach < 0) {
-    const elasticityA = getCachedGene(A, GENE.ELASTICITY);
-    const elasticityB = getCachedGene(B, GENE.ELASTICITY);
-    const avgElasticity = (elasticityA + elasticityB) / 2;
-    const e = CONFIG.RESTITUTION * avgElasticity;
-    let j = -(1 + e) * approach * 0.5;
+    const rvx = B.vx - A.vx;
+    const rvy = B.vy - A.vy;
+    const approach = rvx * nx + rvy * ny;
+    if (approach < 0) {
+      const elasticityA = getCachedGene(A, GENE.ELASTICITY);
+      const elasticityB = getCachedGene(B, GENE.ELASTICITY);
+      const avgElasticity = (elasticityA + elasticityB) / 2;
+      const e = CONFIG.RESTITUTION * avgElasticity;
+      let j = -(1 + e) * approach * 0.5;
 
-    // Slightly clamp j to avoid wild values
-    const maxEffectIntensity = 50.0;
-    const clampedJ = Math.min(j, maxEffectIntensity); // only for visual effect
+      // Slightly clamp j to avoid wild values
+      const maxEffectIntensity = 50.0;
+      const clampedJ = Math.min(j, maxEffectIntensity); // only for visual effect
 
-    const impx = j * nx;
-    const impy = j * ny;
-    A.vx -= impx;
-    A.vy -= impy;
-    B.vx += impx;
-    B.vy += impy;
+      const impx = j * nx;
+      const impy = j * ny;
+      A.vx -= impx;
+      A.vy -= impy;
+      B.vx += impx;
+      B.vy += impy;
 
-    // Collision points based on individual radii
-    const cAx = A.x + radiusA * nx;
-    const cAy = A.y + radiusA * ny;
-    const cBx = B.x - radiusB * nx;
-    const cBy = B.y - radiusB * ny;
+      // Collision points based on individual radii
+      const cAx = A.x + radiusA * nx;
+      const cAy = A.y + radiusA * ny;
+      const cBx = B.x - radiusB * nx;
+      const cBy = B.y - radiusB * ny;
 
-    const offAx = cAx - A.x;
-    const offAy = cAy - A.y;
-    let torqueA = offAx * -impy - offAy * -impx;
-    const glancingFactorA = 1.0 - Math.abs(nx * dx + ny * dy) / dist;
-    torqueA *= 1.0 + glancingFactorA;
-    A.omega -= (torqueA * CONFIG.COLLISION_TORQUE_FACTOR) / (A._inertia || 1);
+      const offAx = cAx - A.x;
+      const offAy = cAy - A.y;
+      let torqueA = offAx * -impy - offAy * -impx;
+      const glancingFactorA = 1.0 - Math.abs(nx * dx + ny * dy) / dist;
+      torqueA *= 1.0 + glancingFactorA;
+      A.omega -= (torqueA * CONFIG.COLLISION_TORQUE_FACTOR) / (A._inertia || 1);
 
-    const offBx = cBx - B.x;
-    const offBy = cBy - B.y;
-    let torqueB = offBx * impy - offBy * impx;
-    torqueB *= 1.0 + glancingFactorA;
-    B.omega += (torqueB * CONFIG.COLLISION_TORQUE_FACTOR) / (B._inertia || 1);
+      const offBx = cBx - B.x;
+      const offBy = cBy - B.y;
+      let torqueB = offBx * impy - offBy * impx;
+      torqueB *= 1.0 + glancingFactorA;
+      B.omega += (torqueB * CONFIG.COLLISION_TORQUE_FACTOR) / (B._inertia || 1);
 
-    const effectX = (cAx + cBx) / 2;
-    const effectY = (cAy + cBy) / 2;
-    if (Number.isFinite(effectX) && Number.isFinite(effectY)) {
-      createCollisionEffect(effectX, effectY, clampedJ, avgElasticity, {});
+      const effectX = (cAx + cBx) / 2;
+      const effectY = (cAy + cBy) / 2;
+      if (Number.isFinite(effectX) && Number.isFinite(effectY)) {
+        createCollisionEffect(effectX, effectY, clampedJ, avgElasticity, {});
+      }
     }
-  }
 
-  const push = (CONFIG.COLLISION_REPULSION * overlap) / 2;
-  A.x -= push * nx;
-  A.y -= push * ny;
-  B.x += push * nx;
-  B.y += push * ny;
+    const push = (CONFIG.COLLISION_REPULSION * overlap) / 2;
+    A.x -= push * nx;
+    A.y -= push * ny;
+    B.x += push * nx;
+    B.y += push * ny;
 
-  // Reproduction check
-  if (
-    A.energy >= CONFIG.REPRO_ENERGY_THRESHOLD &&
-    B.energy >= CONFIG.REPRO_ENERGY_THRESHOLD
-  ) {
-    const reproResult = triggerReproduction(
-      A,
-      B,
-      CONFIG,
-      GENE,
-      W,
-      H,
-      clamp,
-      rand,
-      ctx
-    );
-    if (reproResult.offspring) {
-        offspringAccumulator.push(reproResult.offspring);
-        createCollisionEffect((A.x + B.x) / 2, (A.y + B.y) / 2, 5, 1.0, { color: 'rgba(255, 180, 255, 0.7)' });
+    // Reproduction check
+    if (
+      A.energy >= CONFIG.REPRO_ENERGY_THRESHOLD &&
+      B.energy >= CONFIG.REPRO_ENERGY_THRESHOLD
+    ) {
+      const reproResult = triggerReproduction(
+        A,
+        B,
+        CONFIG,
+        GENE,
+        W,
+        H,
+        clamp,
+        rand,
+        ctx
+      );
+      if (reproResult.offspring) {
+          offspringAccumulator.push(reproResult.offspring);
+          createCollisionEffect((A.x + B.x) / 2, (A.y + B.y) / 2, 5, 1.0, { color: 'rgba(255, 180, 255, 0.7)' });
+      }
+      // Culling set from reproResult is ignored now.
     }
-    // Culling set from reproResult is ignored now.
   }
 }
 
