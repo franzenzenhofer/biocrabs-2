@@ -162,6 +162,27 @@ window.addEventListener('load', () => {
   window.addEventListener('resize', resize);
   resize();
 
+  // --- SCREEN SIZE DEPENDENT CONFIGURATION --- START
+  const DESKTOP_BREAKPOINT = 1024; // Pixels: Adjust as needed
+  let isDesktop = window.innerWidth >= DESKTOP_BREAKPOINT;
+
+  if (isDesktop) {
+    console.log("Desktop configuration activated.");
+    // Override values for desktop screens
+    CONFIG.TARGET_SYSTEM_ENERGY = 4000;  // Higher target for larger screens
+    CONFIG.MAX_FOOD = 70;                // More food for larger area
+    CONFIG.FOOD_SPAWN_RATE = 0.12;       // Slightly faster spawn rate
+    // Optional: CONFIG.FOOD_ENERGY_VALUE = 25; // More valuable food
+    Optional: CONFIG.POP_SIZE = 15;          // Larger initial population
+
+    // Adjust initial environment energy to match the new target
+    environmentEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
+  } else {
+    console.log("Mobile configuration activated.");
+    // Using default values already defined
+  }
+  // --- SCREEN SIZE DEPENDENT CONFIGURATION --- END
+
   canvas.addEventListener('click', onCanvasClick);
 
   initPopulation();
@@ -175,6 +196,7 @@ function resize() {
   H = window.innerHeight;
   canvas.width = W;
   canvas.height = H;
+  // Note: We do not update config on resize to avoid unstable simulation behavior
 }
 
 /***********************************************************************
