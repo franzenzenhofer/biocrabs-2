@@ -103,68 +103,12 @@
 <button id="breedBtn">Breed Next Generation</button>
 <div id="infoPanel">Click crabs to select (min 2 to breed)</div>
 
+<!-- Import utility functions -->
+<script src="util.js"></script>
+<!-- Import reproduction functions -->
+<script src="reproduction.js"></script> 
 <script>
 "use strict";
-
-/***********************************************************************
- * 1) EXTRACT REPETITIVE LOGIC INTO FUNCTIONS (DRY Strategy)
- ***********************************************************************/
-
-/** 
- * Helper: Start a polygon path from a set of vertices 
- * and close it automatically.
- */
-function beginPolygonPath(ctx, vertices) {
-  ctx.beginPath();
-  ctx.moveTo(vertices[0].x, vertices[0].y);
-  for (let i = 1; i < vertices.length; i++) {
-    ctx.lineTo(vertices[i].x, vertices[i].y);
-  }
-  ctx.closePath();
-}
-
-/**
- * Helper: Create a radial gradient with an array of color stops.
- * Each stop: { offset: number, color: string }
- */
-function createRadialGradient(ctx, x, y, innerR, outerR, stops) {
-  const grad = ctx.createRadialGradient(x, y, innerR, x, y, outerR);
-  stops.forEach(stop => {
-    grad.addColorStop(stop.offset, stop.color);
-  });
-  return grad;
-}
-
-/**
- * Helper: Fill an arc with a specified gradient.
- * This avoids repeating the same beginPath/arc/fill pattern.
- */
-function fillArcWithGradient(ctx, x, y, radius, gradient) {
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = gradient;
-  ctx.fill();
-}
-
-/**
- * Helper: Fill a polygon from the given vertices using a fillStyle.
- */
-function fillPolygon(ctx, vertices, fillStyle) {
-  beginPolygonPath(ctx, vertices);
-  ctx.fillStyle = fillStyle;
-  ctx.fill();
-}
-
-/**
- * Helper: Stroke a polygon from the given vertices using a strokeStyle/lineWidth.
- */
-function strokePolygon(ctx, vertices, strokeStyle, lineWidth = 1) {
-  beginPolygonPath(ctx, vertices);
-  ctx.lineWidth = lineWidth;
-  ctx.strokeStyle = strokeStyle;
-  ctx.stroke();
-}
-
 
 /***********************************************************************
  * CONFIG - JIRA TICKET CHANGES
@@ -219,7 +163,15 @@ const CONFIG = {
   MAX_FOOD: 40,              // Max food pellets on screen
   FOOD_SPAWN_RATE: 0.1,      // Chance to spawn food per frame if needed
   FOOD_RADIUS: 5,
-  FOOD_ENERGY_VALUE: 50      // Energy gained from one food pellet
+  FOOD_ENERGY_VALUE: 50,      // Energy gained from one food pellet
+
+  // Reproduction parameters (NEW)
+  REPRO_ENERGY_THRESHOLD: 120,   // Min energy for BOTH parents to potentially reproduce
+  MAX_EFFECTIVE_REPRO_ENERGY: 300, // Energy level above which repro prob doesn't increase
+  MIN_REPRO_PROB: 1,           // Probability if both parents are exactly at threshold (Increased)
+  MAX_REPRO_PROB: 1,           // Max probability if min energy is >= max effective energy (Increased)
+  REPRODUCTION_ENERGY_COST: 75,   // Energy cost per parent for reproduction
+  OFFSPRING_START_ENERGY: 85      // Initial energy for a newborn crab
 };
 
 /***********************************************************************
@@ -230,88 +182,29 @@ let population=[];
 let foodPellets=[];
 let globalTime=0;
 
-/***********************************************************************
- * UTILS
- ***********************************************************************/
-const Utils = {
-  clamp(x,lo,hi){ return Math.max(lo, Math.min(hi,x)); },
-  rand(min=0,max=1){ return Math.random()*(max-min)+min; },
-  crossover(a,b){ 
-    let child = [];
-    for (let i = 0; i < a.length; i++) {
-      child[i] = Math.random() < 0.5 ? a[i] : b[i];
-    }
-    // Handle color genes separately
-    child[this.GENE.COLOR_R] = Math.random() < 0.5 ? a[this.GENE.COLOR_R] : b[this.GENE.COLOR_R];
-    child[this.GENE.COLOR_G] = Math.random() < 0.5 ? a[this.GENE.COLOR_G] : b[this.GENE.COLOR_G];
-    child[this.GENE.COLOR_B] = Math.random() < 0.5 ? a[this.GENE.COLOR_B] : b[this.GENE.COLOR_B];
-    return child;
-  },
-
-  getPolyVerts(n, r, elong, orient){
-    let arr=[];
-    for(let i=0;i<n;i++){
-      let angle= orient+ 2*Math.PI*(i/n);
-      arr.push({ x:r*Math.cos(angle), y:r*Math.sin(angle)* elong });
-    }
-    return arr;
-  },
-  getAttach(verts, frac){
-    let edges=[], total=0;
-    for(let i=0;i<verts.length;i++){
-      let v1=verts[i], v2=verts[(i+1)%verts.length];
-      let dx= v2.x- v1.x, dy= v2.y- v1.y;
-      let dist= Math.sqrt(dx*dx+ dy*dy);
-      edges.push({v1,v2,dist});
-      total+= dist;
-    }
-    let targ= frac* total, acc=0;
-    for(let e of edges){
-      if(acc+ e.dist>= targ){
-        let leftover= targ- acc;
-        let portion= leftover/e.dist;
-        return {
-          x: e.v1.x+ portion*( e.v2.x- e.v1.x),
-          y: e.v1.y+ portion*( e.v2.y- e.v1.y)
-        };
-      }
-      acc+= e.dist;
-    }
-    return verts[0];
-  },
-  
-  // Gene index constants
-  GENE: {
-    // Body genes
-    RADIUS: 0,
-    ELONGATION: 1,
-    ORIENT: 2,
-    // Derived genes (after limb genes)
-    FREQ: 3 + CONFIG.LIMB_COUNT * 5,
-    AMP: 4 + CONFIG.LIMB_COUNT * 5,
-    // Main genes
-    SIDES: 53,
-    BODY_SYM: 54,
-    MOVE_SYM: 55,
-    COLOR_R: 56,
-    COLOR_G: 57,
-    COLOR_B: 58,
-    ENERGY: 59,
-    // New genes
-    DRAG_MOD: 60,
-    ROT_DRAG_MOD: 61,
-    ELASTICITY: 62, 
-    TORQUE_EFF: 63,
-    POWER_RATIO: 64
-  },
-  
-  getGene(genotype, gene, fallback=1.0) {
-    return genotype[gene] !== undefined ? genotype[gene] : fallback;
-  },
-  getFormattedGene(genotype, gene, fallback=1.0) {
-    const value = this.getGene(genotype, gene, fallback);
-    return Math.round(value * 100) / 100;
-  }
+// Gene index constants
+const GENE = {
+  // Body genes
+  RADIUS: 0,
+  ELONGATION: 1,
+  ORIENT: 2,
+  // Derived genes (after limb genes)
+  FREQ: 3 + CONFIG.LIMB_COUNT * 5,
+  AMP: 4 + CONFIG.LIMB_COUNT * 5,
+  // Main genes
+  SIDES: 53,
+  BODY_SYM: 54,
+  MOVE_SYM: 55,
+  COLOR_R: 56,
+  COLOR_G: 57,
+  COLOR_B: 58,
+  ENERGY: 59,
+  // New genes
+  DRAG_MOD: 60,
+  ROT_DRAG_MOD: 61,
+  ELASTICITY: 62, 
+  TORQUE_EFF: 63,
+  POWER_RATIO: 64
 };
 
 /***********************************************************************
@@ -337,162 +230,13 @@ function resize(){
 }
 
 /***********************************************************************
- * GENETICS
- ***********************************************************************/
-function createRandomGenotype(){
-  const LC = CONFIG.LIMB_COUNT;
-  let g = [];
-  const geneCount = 3 + (LC*5) + 2 + LC + 1 + 2 + 3 + 1 + 5;
-
-  // Initialize array
-  for (let i = 0; i < geneCount; i++) {
-    g[i] = 0;
-  }
-
-  // Body genes
-  g[Utils.GENE.RADIUS] = Utils.rand(15, 30);
-  g[Utils.GENE.ELONGATION] = Utils.rand(0.7, 1.3);
-  g[Utils.GENE.ORIENT] = Utils.rand(0, 2*Math.PI);
-
-  // Limb genes
-  for (let i = 0; i < LC; i++) {
-    let base = 3 + i*5;
-    g[base] = Utils.rand(0, 2*Math.PI);
-    g[base+1] = Utils.rand(10, 40);
-    g[base+2] = Utils.rand(0.1, 0.7);
-    g[base+3] = Utils.rand(0.5, 0.9);
-    g[base+4] = Utils.rand(0, 2*Math.PI);
-  }
-  
-  // Frequency and amplitude
-  g[Utils.GENE.FREQ] = Utils.rand(1, 3);
-  g[Utils.GENE.AMP] = Utils.rand(0.2, 1);
-
-  // Attach fraction
-  for (let i = 0; i < LC; i++) {
-    g[45 + i] = Math.random();
-  }
-  
-  // Shape and symmetry
-  g[Utils.GENE.SIDES] = Math.floor(Utils.rand(3, 9));
-  g[Utils.GENE.BODY_SYM] = Utils.rand(0, 0.4);
-  g[Utils.GENE.MOVE_SYM] = 0;
-  
-  // Color
-  g[Utils.GENE.COLOR_R] = Utils.rand(0, 255);
-  g[Utils.GENE.COLOR_G] = Utils.rand(0, 255);
-  g[Utils.GENE.COLOR_B] = Utils.rand(0, 255);
-  
-  // Energy
-  g[Utils.GENE.ENERGY] = Utils.rand(0, 10);
-  
-  // Physical traits
-  g[Utils.GENE.DRAG_MOD] = Utils.rand(0.5, 1.5);
-  g[Utils.GENE.ROT_DRAG_MOD] = Utils.rand(0.7, 1.3);
-  g[Utils.GENE.ELASTICITY] = Utils.rand(0.8, 1.2);
-  g[Utils.GENE.TORQUE_EFF] = Utils.rand(0.8, 1.2);
-  g[Utils.GENE.POWER_RATIO] = Utils.rand(0.8, 1.5);
-
-  return g;
-}
-
-function mutate(g, mutationRate=CONFIG.MUTATION_RATE){
-  const LC = CONFIG.LIMB_COUNT;
-  
-  for(let i=0; i<g.length; i++){
-    if(Math.random() < mutationRate){
-      // Color genes can change more dramatically
-      if (i === Utils.GENE.COLOR_R || i === Utils.GENE.COLOR_G || i === Utils.GENE.COLOR_B) {
-        g[i] += Utils.rand(-50, 50);
-      } else {
-        g[i] *= (1 + Utils.rand(-0.2, 0.2));
-      }
-    }
-  }
-  
-  // Clamps
-  g[Utils.GENE.SIDES] = Utils.clamp(Math.round(g[Utils.GENE.SIDES]), 3, 8);
-  g[Utils.GENE.BODY_SYM] = Utils.clamp(g[Utils.GENE.BODY_SYM], 0, 1);
-  g[Utils.GENE.MOVE_SYM] = Utils.clamp(g[Utils.GENE.MOVE_SYM], 0, 1);
-  g[Utils.GENE.COLOR_R] = Utils.clamp(g[Utils.GENE.COLOR_R], 0, 255);
-  g[Utils.GENE.COLOR_G] = Utils.clamp(g[Utils.GENE.COLOR_G], 0, 255);
-  g[Utils.GENE.COLOR_B] = Utils.clamp(g[Utils.GENE.COLOR_B], 0, 255);
-  g[Utils.GENE.ENERGY] = Utils.clamp(g[Utils.GENE.ENERGY], 0, 10);
-  
-  g[Utils.GENE.DRAG_MOD] = Utils.clamp(g[Utils.GENE.DRAG_MOD], 0.5, 1.5);
-  g[Utils.GENE.ROT_DRAG_MOD] = Utils.clamp(g[Utils.GENE.ROT_DRAG_MOD], 0.7, 1.3);
-  g[Utils.GENE.ELASTICITY] = Utils.clamp(g[Utils.GENE.ELASTICITY], 0.8, 1.2);
-  g[Utils.GENE.TORQUE_EFF] = Utils.clamp(g[Utils.GENE.TORQUE_EFF], 0.8, 1.2);
-  g[Utils.GENE.POWER_RATIO] = Utils.clamp(g[Utils.GENE.POWER_RATIO], 0.8, 1.5);
-
-  g[Utils.GENE.FREQ] = Math.max(g[Utils.GENE.FREQ], 1);
-  g[Utils.GENE.AMP] = Math.max(g[Utils.GENE.AMP], 0.5);
-
-  for(let i=0; i<LC; i++){
-    let base = 3 + i*5;
-    g[base+1] = Math.max(g[base+1], 1);
-    g[base+2] = Utils.clamp(g[base+2], 0.05, 1);
-    g[base+3] = Utils.clamp(g[base+3], 0.1, 0.95);
-  }
-}
-
-function applyBodySymmetry(g){
-  const LC = CONFIG.LIMB_COUNT;
-  let sf = Utils.clamp(g[Utils.GENE.BODY_SYM], 0, 1);
-  if (sf <= 0) return;
-  
-  let half = LC / 2;
-  for (let i = 0; i < half; i++) {
-    let L = 3 + i * 5, R = 3 + (i + half) * 5;
-    let lAng = g[L];
-    let lLen = g[L + 1];
-    let lBrA = g[L + 2];
-    let lRat = g[L + 3];
-    let rAng = g[R];
-    let rLen = g[R + 1];
-    let rBrA = g[R + 2];
-    let rRat = g[R + 3];
-    let lMir = -lAng;
-    
-    g[R]   = sf * lMir + (1 - sf) * rAng;
-    g[R+1] = sf * lLen + (1 - sf) * rLen;
-    g[R+2] = sf * lBrA + (1 - sf) * rBrA;
-    g[R+3] = sf * lRat + (1 - sf) * rRat;
-
-    let la = g[45 + i], ra = g[45 + (i + half)];
-    let laMir = 1 - la;
-    g[45 + (i + half)] = sf * laMir + (1 - sf) * ra;
-  }
-}
-
-function applyMovementSymmetry(g){
-  const LC = CONFIG.LIMB_COUNT;
-  let msf = Utils.clamp(g[Utils.GENE.MOVE_SYM], 0, 1);
-  if (msf <= 0) return;
-  
-  let half = LC / 2;
-  for (let i = 0; i < half; i++) {
-    let L = 3 + i * 5, R = 3 + (i + half) * 5;
-    let lPh = g[L + 4], rPh = g[R + 4];
-    g[R + 4] = msf * lPh + (1 - msf) * rPh;
-  }
-}
-
-function getSymmetricGenotype(orig){
-  let copy= orig.slice();
-  applyBodySymmetry(copy);
-  applyMovementSymmetry(copy);
-  return copy;
-}
-
-/***********************************************************************
  * POPULATION
  ***********************************************************************/
 function initPopulation(){
   population=[];
   foodPellets=[];
   for(let i=0;i< CONFIG.POP_SIZE;i++){
-    let geno= createRandomGenotype();
+    let geno= createRandomGenotype(CONFIG, GENE);
     let crab = {
       genotype: geno,
       x: Math.random()*W,
@@ -501,7 +245,8 @@ function initPopulation(){
       orientation: Math.random()* 2*Math.PI,
       omega:0,
       selected:false,
-      energy: CONFIG.BASE_ENERGY + Utils.getGene(geno, Utils.GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR
+      energy: CONFIG.BASE_ENERGY + Utils.getGene(geno, GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR,
+      markedForCulling: false
     };
     createCrabPattern(crab);
     population.push(crab);
@@ -518,14 +263,14 @@ function initPopulation(){
 // Patterns for each crab
 function createCrabPattern(crab) {
   const g = crab.genotype;
-  let colR = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_R)), 0, 255);
-  let colG = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_G)), 0, 255);
-  let colB = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_B)), 0, 255);
+  let colR = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_R)), 0, 255);
+  let colG = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_G)), 0, 255);
+  let colB = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_B)), 0, 255);
   
-  let dragMod = Utils.getGene(g, Utils.GENE.DRAG_MOD);
-  let elasticity = Utils.getGene(g, Utils.GENE.ELASTICITY);
-  let rad = Utils.getGene(g, Utils.GENE.RADIUS);
-  let sides = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.SIDES)), 3, 8);
+  let dragMod = Utils.getGene(g, GENE.DRAG_MOD);
+  let elasticity = Utils.getGene(g, GENE.ELASTICITY);
+  let rad = Utils.getGene(g, GENE.RADIUS);
+  let sides = Utils.clamp(Math.round(Utils.getGene(g, GENE.SIDES)), 3, 8);
 
   let colorIntensity = 0.8 + 0.4 * (elasticity - 0.8) / 0.4;
 
@@ -577,9 +322,9 @@ function breedNextGeneration(){
   if(chosen.length < 2) return;
   
   chosen.forEach(crab => {
-    const dragFitness = 1.2 - Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD);
-    const torqueFitness = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
-    const powerFitness = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO);
+    const dragFitness = 1.2 - Utils.getGene(crab.genotype, GENE.DRAG_MOD);
+    const torqueFitness = Utils.getGene(crab.genotype, GENE.TORQUE_EFF);
+    const powerFitness = Utils.getGene(crab.genotype, GENE.POWER_RATIO);
     crab._fitness = (dragFitness + torqueFitness * 1.2 + powerFitness) / 3.2;
   });
   
@@ -596,7 +341,9 @@ function breedNextGeneration(){
       vx: 0, vy: 0,
       orientation: Math.random() * 2 * Math.PI,
       omega: 0,
-      selected: false
+      selected: false,
+      energy: CONFIG.BASE_ENERGY + Utils.getGene(chosen[i].genotype, GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR,
+      markedForCulling: false
     };
     createCrabPattern(crab);
     newPop.push(crab);
@@ -619,8 +366,8 @@ function breedNextGeneration(){
     candidates.sort((a, b) => b._fitness - a._fitness);
     parent2 = candidates[0].genotype;
     
-    let child = Utils.crossover(parent1, parent2);
-    mutate(child, CONFIG.MUTATION_RATE);
+    let child = Utils.crossover(parent1, parent2, GENE);
+    Utils.mutate(child, CONFIG, GENE);
     
     let crab = {
       genotype: child,
@@ -629,7 +376,9 @@ function breedNextGeneration(){
       vx: 0, vy: 0,
       orientation: Math.random() * 2 * Math.PI,
       omega: 0,
-      selected: false
+      selected: false,
+      energy: CONFIG.BASE_ENERGY + Utils.getGene(child, GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR,
+      markedForCulling: false
     };
     createCrabPattern(crab);
     newPop.push(crab);
@@ -666,14 +415,14 @@ function applyLimbForces(crab){
   crab._torque=0;
   crab._currentThrust = 0; // Reset and accumulate thrust for energy cost
 
-  let rad= Utils.getGene(crab.genotype, Utils.GENE.RADIUS);
+  let rad= Utils.getGene(crab.genotype, GENE.RADIUS);
   crab._inertia= 1 + CONFIG.INERTIA_FACTOR * (rad * rad);
 
-  let freq= Utils.getGene(crab.genotype, Utils.GENE.FREQ);
-  let amp = Utils.getGene(crab.genotype, Utils.GENE.AMP);
+  let freq= Utils.getGene(crab.genotype, GENE.FREQ);
+  let amp = Utils.getGene(crab.genotype, GENE.AMP);
   
-  let powerRatio = Utils.getGene(crab.genotype, Utils.GENE.POWER_RATIO);
-  let torqueEfficiency = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
+  let powerRatio = Utils.getGene(crab.genotype, GENE.POWER_RATIO);
+  let torqueEfficiency = Utils.getGene(crab.genotype, GENE.TORQUE_EFF);
 
   const pulsePhase = (globalTime % CONFIG.PULSE_INTERVAL) / CONFIG.PULSE_INTERVAL;
   const pulseFactor = Math.pow(Math.sin(pulsePhase * Math.PI), 2);
@@ -729,8 +478,8 @@ function applyLimbForces(crab){
 }
 
 function applyQuadraticDrag(crab){
-  let dragMod = Utils.getGene(crab.genotype, Utils.GENE.DRAG_MOD);
-  let rotDragMod = Utils.getGene(crab.genotype, Utils.GENE.ROT_DRAG_MOD);
+  let dragMod = Utils.getGene(crab.genotype, GENE.DRAG_MOD);
+  let rotDragMod = Utils.getGene(crab.genotype, GENE.ROT_DRAG_MOD);
   
   let vx = crab.vx, vy = crab.vy;
   let s2 = vx*vx + vy*vy;
@@ -828,13 +577,19 @@ function handleCrabCollision(A, B) {
   let approach = rvx * nx + rvy * ny;
   
   if (approach < 0) {
-    let elasticityA = Utils.getGene(A.genotype, Utils.GENE.ELASTICITY);
-    let elasticityB = Utils.getGene(B.genotype, Utils.GENE.ELASTICITY);
+    let elasticityA = Utils.getGene(A.genotype, GENE.ELASTICITY);
+    let elasticityB = Utils.getGene(B.genotype, GENE.ELASTICITY);
     let avgElasticity = (elasticityA + elasticityB) / 2;
     
     let e = CONFIG.RESTITUTION * avgElasticity;
     let j = -(1 + e) * approach * 0.5;
-    let impx = j * nx, impy = j * ny;
+
+    // --- Safeguard for effect intensity (NEW) ---
+    const maxEffectIntensity = 50.0; // Limit intensity passed to visual effect
+    const clampedIntensity = Utils.clamp(j, 0, maxEffectIntensity);
+    // --- End Safeguard ---
+
+    let impx = j * nx, impy = j * ny; // Use original j for physics
 
     A.vx -= impx; A.vy -= impy;
     B.vx += impx; B.vy += impy;
@@ -856,12 +611,80 @@ function handleCrabCollision(A, B) {
     torqueB *= (1.0 + glancingFactorB);
     B.omega += (torqueB * CONFIG.COLLISION_TORQUE_FACTOR) / (B._inertia || 1);
     
-    createCollisionEffect((cAx + cBx) / 2, (cAy + cBy) / 2, j, avgElasticity);
+    // --- DEBUG: Check for invalid state AFTER collision impulse/torque ---
+    if (!Number.isFinite(A.vx) || !Number.isFinite(A.vy) || !Number.isFinite(A.omega) ||
+        !Number.isFinite(B.vx) || !Number.isFinite(B.vy) || !Number.isFinite(B.omega)) {
+        console.error(`Invalid state AFTER collision impulse/torque: CrabA ${population.indexOf(A)} vs CrabB ${population.indexOf(B)}`, {
+            A: {vx: A.vx, vy: A.vy, omega: A.omega, energy: A.energy},
+            B: {vx: B.vx, vy: B.vy, omega: B.omega, energy: B.energy},
+            impulse: {impx, impy}, torque: {torqueA, torqueB}
+        });
+        // Attempt recovery: Reset velocities if NaN/Infinity
+        if (!Number.isFinite(A.vx)) A.vx = 0;
+        if (!Number.isFinite(A.vy)) A.vy = 0;
+        if (!Number.isFinite(A.omega)) A.omega = 0;
+        if (!Number.isFinite(B.vx)) B.vx = 0;
+        if (!Number.isFinite(B.vy)) B.vy = 0;
+        if (!Number.isFinite(B.omega)) B.omega = 0;
+    }
+
+    // Use clampedIntensity for the visual effect (MODIFIED)
+    const effectX = (cAx + cBx) / 2;
+    const effectY = (cAy + cBy) / 2;
+    if (Number.isFinite(effectX) && Number.isFinite(effectY)) { // KISS: Check coords before creating effect
+        createCollisionEffect(effectX, effectY, clampedIntensity, avgElasticity, {});
+    }
   }
   
   let push = CONFIG.COLLISION_REPULSION * overlap * 0.5;
   A.x -= push * nx; A.y -= push * ny;
   B.x += push * nx; B.y += push * ny;
+
+  // --- NEW: Autonomous Reproduction Logic ---
+  // --- DEBUG: Log energy levels before repro check ---
+  if (population.indexOf(A) !== -1 && population.indexOf(B) !== -1) { // Check if crabs still exist
+      // Log only occasionally to avoid flooding console if collisions are frequent
+      if (Math.random() < 0.05) { 
+          console.log(`DEBUG Repro Check: CrabA ${population.indexOf(A)} E:${A.energy.toFixed(1)}, CrabB ${population.indexOf(B)} E:${B.energy.toFixed(1)}, Threshold:${CONFIG.REPRO_ENERGY_THRESHOLD}`);
+      }
+  }
+  // 1. Check Energy Threshold
+  if (A.energy >= CONFIG.REPRO_ENERGY_THRESHOLD && B.energy >= CONFIG.REPRO_ENERGY_THRESHOLD) {
+    // 2. Calculate Minimum Energy
+    let minEnergy = Math.min(A.energy, B.energy);
+
+    // 3. Calculate Probability Scale Factor
+    let energyRange = CONFIG.MAX_EFFECTIVE_REPRO_ENERGY - CONFIG.REPRO_ENERGY_THRESHOLD;
+    let scaleFactor = 0;
+    if (energyRange > 0) { // Avoid division by zero if thresholds are the same
+        scaleFactor = Utils.clamp((minEnergy - CONFIG.REPRO_ENERGY_THRESHOLD) / energyRange, 0, 1);
+    }
+    else if (minEnergy >= CONFIG.REPRO_ENERGY_THRESHOLD) {
+        scaleFactor = 1; // If range is zero, prob is max if above threshold
+    }
+
+    // 4. Determine Final Probability (Linear scaling)
+    let reproProbability = CONFIG.MIN_REPRO_PROB + (CONFIG.MAX_REPRO_PROB - CONFIG.MIN_REPRO_PROB) * scaleFactor;
+
+    // 5. Roll the Dice
+    if (Math.random() < reproProbability) {
+      triggerReproduction(A, B);
+    }
+  }
+
+  // --- DEBUG: Check for invalid state AFTER collision repulsion ---
+  if (!Number.isFinite(A.x) || !Number.isFinite(A.y) || !Number.isFinite(B.x) || !Number.isFinite(B.y)) {
+      console.error(`Invalid state AFTER collision repulsion: CrabA ${population.indexOf(A)} vs CrabB ${population.indexOf(B)}`, {
+          A: {x: A.x, y: A.y, energy: A.energy},
+          B: {x: B.x, y: B.y, energy: B.energy},
+          push, nx, ny
+      });
+      // Attempt recovery: Clamp position
+      const W = window.innerWidth; 
+      const H = window.innerHeight;
+      A.x = Utils.clamp(A.x, 0, W); A.y = Utils.clamp(A.y, 0, H);
+      B.x = Utils.clamp(B.x, 0, W); B.y = Utils.clamp(B.y, 0, H);
+  }
 }
 
 /***********************************************************************
@@ -869,138 +692,29 @@ function handleCrabCollision(A, B) {
  ***********************************************************************/
 const collisionEffects = [];
 
-/** Create a visual effect at collision point */
-function createCollisionEffect(x, y, intensity, elasticity) {
-  const minIntensity = 0.2;
-  if (intensity < minIntensity) return;
-  
-  const size = Math.min(30, 5 + intensity * 3);
-  const lifespan = Math.min(1.0, 0.3 + intensity * 0.04 + elasticity * 0.2);
-  
-  const particleCount = Math.floor(3 + intensity * 0.5);
-  for (let i = 0; i < particleCount; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 1 + Math.random() * 2 * intensity;
-    const particleSize = 2 + Math.random() * 3;
-    const lifetime = 0.5 + Math.random() * 0.5 * lifespan;
-    
-    collisionEffects.push({
-      x, y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      size: particleSize,
-      life: lifetime,
-      maxLife: lifetime,
-      type: 'particle'
-    });
-  }
-  
-  // Ripple wave
-  collisionEffects.push({
-    x, y,
-    size: size * 0.5,
-    maxSize: size * 3,
-    life: lifespan,
-    maxLife: lifespan,
-    type: 'ripple',
-    intensity,
-    elasticity
-  });
-  
-  // Flash
-  collisionEffects.push({
-    x, y,
-    size,
-    life: lifespan * 0.3,
-    maxLife: lifespan * 0.3,
-    type: 'flash',
-    intensity
-  });
-}
-
-/** Update and draw collision effects */
-function updateCollisionEffects() {
-  for (let i = collisionEffects.length - 1; i >= 0; i--) {
-    const effect = collisionEffects[i];
-    effect.life -= CONFIG.TIME_STEP;
-    
-    if (effect.life <= 0) {
-      collisionEffects.splice(i, 1);
-      continue;
-    }
-    
-    if (effect.type === 'particle') {
-      effect.x += effect.vx * CONFIG.TIME_STEP;
-      effect.y += effect.vy * CONFIG.TIME_STEP;
-      effect.vx *= 0.95;
-      effect.vy *= 0.95;
-    } 
-    if (effect.type === 'ripple') {
-      effect.size += (effect.maxSize - effect.size) * CONFIG.TIME_STEP * 3;
-    }
-  }
-  
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  
-  for (const effect of collisionEffects) {
-    const lifeFactor = effect.life / effect.maxLife;
-    if (effect.type === 'particle') {
-      ctx.beginPath();
-      ctx.arc(effect.x, effect.y, effect.size * lifeFactor, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 255, 255, ${lifeFactor * 0.7})`;
-      ctx.fill();
-    } 
-    else if (effect.type === 'ripple') {
-      const gradient = ctx.createRadialGradient(
-        effect.x, effect.y, 0,
-        effect.x, effect.y, effect.size
-      );
-      const hue = 180 + 40 * (effect.elasticity - 1);
-      gradient.addColorStop(0, `hsla(${hue}, 80%, 70%, 0)`);
-      gradient.addColorStop(0.3, `hsla(${hue}, 80%, 70%, ${lifeFactor * 0.2})`);
-      gradient.addColorStop(0.7, `hsla(${hue}, 70%, 60%, ${lifeFactor * 0.1})`);
-      gradient.addColorStop(1, `hsla(${hue}, 60%, 50%, 0)`);
-
-      ctx.beginPath();
-      ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
-      ctx.fill();
-      
-      ctx.beginPath();
-      ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
-      ctx.strokeStyle = `hsla(${hue}, 80%, 70%, ${lifeFactor * 0.3})`;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    } 
-    else if (effect.type === 'flash') {
-      const gradient = ctx.createRadialGradient(
-        effect.x, effect.y, 0,
-        effect.x, effect.y, effect.size
-      );
-      gradient.addColorStop(0, `rgba(255, 255, 255, ${lifeFactor * 0.8})`);
-      gradient.addColorStop(0.5, `rgba(200, 220, 255, ${lifeFactor * 0.4})`);
-      gradient.addColorStop(1, `rgba(150, 180, 255, 0)`);
-
-      ctx.beginPath();
-      ctx.arc(effect.x, effect.y, effect.size, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
-      ctx.fill();
-    }
-  }
-  ctx.restore();
-}
+// No wrappers needed - direct calls to utility functions
 
 function integrateCrab(crab){
   let dt= CONFIG.TIME_STEP;
   
-  let torqueEfficiency = Utils.getGene(crab.genotype, Utils.GENE.TORQUE_EFF);
+  let torqueEfficiency = Utils.getGene(crab.genotype, GENE.TORQUE_EFF);
   let torque= crab._torque * CONFIG.TORQUE_MULTIPLIER * torqueEfficiency;
   
   let speedFactor = Math.min(1, Math.sqrt(crab.vx*crab.vx + crab.vy*crab.vy) / 10);
   torque *= (0.7 + 0.3 * speedFactor);
   
   let alpha= torque / (crab._inertia||1);
+
+  // --- DEBUG: Check for invalid state BEFORE integration ---
+  if (!Number.isFinite(crab.vx) || !Number.isFinite(crab.vy) || !Number.isFinite(crab.omega) ||
+      !Number.isFinite(crab._fx) || !Number.isFinite(crab._fy) || !Number.isFinite(crab._torque) || !Number.isFinite(alpha)) {
+      console.warn(`Invalid state BEFORE integration: Crab ${population.indexOf(crab)}`, {
+          x: crab.x, y: crab.y, vx: crab.vx, vy: crab.vy, omega: crab.omega,
+          fx: crab._fx, fy: crab._fy, torque: crab._torque, alpha: alpha, energy: crab.energy, inertia: crab._inertia
+      });
+      // Simplistic recovery attempt: Reset forces/acceleration
+      crab._fx = 0; crab._fy = 0; crab._torque = 0; alpha = 0;
+  }
 
   crab.vx+= crab._fx* dt;
   crab.vy+= crab._fy* dt;
@@ -1016,6 +730,26 @@ function integrateCrab(crab){
   crab.orientation+= crab.omega* dt;
   crab.orientation = crab.orientation % (2 * Math.PI);
   
+  // --- DEBUG: Check for invalid state AFTER integration ---
+  if (!Number.isFinite(crab.x) || !Number.isFinite(crab.y) || !Number.isFinite(crab.vx) ||
+      !Number.isFinite(crab.vy) || !Number.isFinite(crab.omega)) {
+      console.error(`Invalid state AFTER integration: Crab ${population.indexOf(crab)}`, {
+          x: crab.x, y: crab.y, vx: crab.vx, vy: crab.vy, omega: crab.omega, energy: crab.energy
+      });
+      // Attempt recovery: Clamp position and reset velocity
+      const W = window.innerWidth; // Re-get dimensions just in case
+      const H = window.innerHeight;
+      crab.x = Utils.clamp(crab.x, 0, W);
+      crab.y = Utils.clamp(crab.y, 0, H);
+      crab.vx = 0; crab.vy = 0; crab.omega = 0;
+  }
+
+  // --- DEBUG: Check if stuck near top-left ---
+  // Use slightly larger bounds and velocity threshold
+  if (crab.x < 20 && crab.y < 20 && Math.abs(crab.vx) < 1 && Math.abs(crab.vy) < 1 && crab.energy > 0) {
+      console.log(`DEBUG: Crab ${population.indexOf(crab)} potentially stuck? Pos: (${crab.x.toFixed(1)}, ${crab.y.toFixed(1)}), Vel: (${crab.vx.toFixed(2)}, ${crab.vy.toFixed(2)}), Energy: ${crab.energy.toFixed(1)}, Omega: ${crab.omega.toFixed(2)}`);
+  }
+
   // Apply energy costs
   const cost = (CONFIG.BASAL_METABOLISM_COST + (crab._currentThrust * CONFIG.THRUST_ENERGY_COST)) * dt;
   crab.energy -= cost;
@@ -1024,7 +758,7 @@ function integrateCrab(crab){
 
 function handleWallCollision(crab){
   let e = CONFIG.RESTITUTION;
-  let elasticity = Utils.getGene(crab.genotype, Utils.GENE.ELASTICITY);
+  let elasticity = Utils.getGene(crab.genotype, GENE.ELASTICITY);
   const waterEdgeEffect = 0.7; 
   e *= waterEdgeEffect * elasticity;
   
@@ -1071,7 +805,9 @@ function handleWallCollision(crab){
       if(crab.y <= 0) contactY = 0;
       if(crab.y >= H) contactY = H;
       
-      createCollisionEffect(contactX, contactY, intensity, elasticity);
+      if (Number.isFinite(contactX) && Number.isFinite(contactY)) { // KISS: Check coords before creating effect
+          createCollisionEffect(contactX, contactY, intensity, 0.8, {});
+      }
     }
   }
 }
@@ -1194,24 +930,24 @@ function drawEnergyDots(ctx, eVal, bodyR, color) {
 
 function drawCrab(ctx, g, t, crabX, crabY) {
   const LC = CONFIG.LIMB_COUNT;
-  let rad = Utils.getGene(g, Utils.GENE.RADIUS);
-  let el = Utils.getGene(g, Utils.GENE.ELONGATION);
-  let ornt = Utils.getGene(g, Utils.GENE.ORIENT);
-  let freq = Utils.getGene(g, Utils.GENE.FREQ);
-  let amp = Utils.getGene(g, Utils.GENE.AMP);
-  let sides = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.SIDES)), 3, 8);
+  let rad = Utils.getGene(g, GENE.RADIUS);
+  let el = Utils.getGene(g, GENE.ELONGATION);
+  let ornt = Utils.getGene(g, GENE.ORIENT);
+  let freq = Utils.getGene(g, GENE.FREQ);
+  let amp = Utils.getGene(g, GENE.AMP);
+  let sides = Utils.clamp(Math.round(Utils.getGene(g, GENE.SIDES)), 3, 8);
   
-  let colR = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_R)), 0, 255);
-  let colG = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_G)), 0, 255);
-  let colB = Utils.clamp(Math.round(Utils.getGene(g, Utils.GENE.COLOR_B)), 0, 255);
+  let colR = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_R)), 0, 255);
+  let colG = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_G)), 0, 255);
+  let colB = Utils.clamp(Math.round(Utils.getGene(g, GENE.COLOR_B)), 0, 255);
   let color = `rgb(${colR},${colG},${colB})`;
-  let energy = Utils.clamp(Utils.getGene(g, Utils.GENE.ENERGY), 0, 10);
+  let energy = Utils.clamp(Utils.getGene(g, GENE.ENERGY), 0, 10);
   
-  let dragMod = Utils.getGene(g, Utils.GENE.DRAG_MOD);
-  let rotDragMod = Utils.getGene(g, Utils.GENE.ROT_DRAG_MOD);
-  let elasticity = Utils.getGene(g, Utils.GENE.ELASTICITY);
-  let torqueEff = Utils.getGene(g, Utils.GENE.TORQUE_EFF);
-  let powerRatio = Utils.getGene(g, Utils.GENE.POWER_RATIO);
+  let dragMod = Utils.getGene(g, GENE.DRAG_MOD);
+  let rotDragMod = Utils.getGene(g, GENE.ROT_DRAG_MOD);
+  let elasticity = Utils.getGene(g, GENE.ELASTICITY);
+  let torqueEff = Utils.getGene(g, GENE.TORQUE_EFF);
+  let powerRatio = Utils.getGene(g, GENE.POWER_RATIO);
 
   let breathingFactor = 1.0 + 0.03 * Math.sin(t * 0.8);
   let wobbleFactor = 0.02 * Math.sin(t * 1.2);
@@ -1228,16 +964,12 @@ function drawCrab(ctx, g, t, crabX, crabY) {
   
   let elongation = el * (0.8 + 0.4 * (1 - dragMod)) * breathingFactor;
   
-  let verts = [];
-  for (let i = 0; i < sides; i++) {
-    let angle = bodyRotation + 2 * Math.PI * (i / sides);
-    let radiusVariation = rad * (0.9 + 0.2 * Math.sin(angle * 3 + t * 0.5) * dragMod);
-    let breathingRadius = radiusVariation * breathingFactor;
-    
-    verts.push({
-      x: breathingRadius * Math.cos(angle) * (1 + wobbleFactor * Math.sin(angle * sides)),
-      y: breathingRadius * Math.sin(angle) * elongation * (1 + wobbleFactor * Math.cos(angle * sides))
-    });
+  let verts = Utils.getPolyVerts(sides, rad, elongation, bodyRotation);
+  // Apply wobble effect
+  for (let i = 0; i < verts.length; i++) {
+    const angle = bodyRotation + 2 * Math.PI * (i / sides);
+    verts[i].x *= (1 + wobbleFactor * Math.sin(angle * sides));
+    verts[i].y *= (1 + wobbleFactor * Math.cos(angle * sides));
   }
   
   // Shadow
@@ -1400,10 +1132,10 @@ function drawWorld(){
   }
   ctx.restore();
   
-  updateCollisionEffects();
+  updateCollisionEffects(ctx, collisionEffects, CONFIG.TIME_STEP);
   
   for(let crab of population){
-    let drawG = getSymmetricGenotype(crab.genotype);
+    let drawG = getSymmetricGenotype(crab.genotype, CONFIG, GENE);
     ctx.save();
     ctx.translate(crab.x, crab.y);
     ctx.rotate(crab.orientation);
@@ -1448,18 +1180,40 @@ function drawWorld(){
     
     drawCrab(ctx, drawG, globalTime, crab.x, crab.y);
     
-    // Draw energy bar
+    // --- Draw Energy Bar (Moved from drawCrab) ---
+    // Get necessary info directly from crab object and genes
     const energyRatio = Utils.clamp(crab.energy / (CONFIG.BASE_ENERGY + 10 * CONFIG.ENERGY_GENE_FACTOR), 0, 1);
-    const barWidth = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) * 1.5;
-    const barHeight = 4;
-    const barYOffset = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) * 0.2; // Position bar inside body
+    const crabRadius = Utils.getGene(crab.genotype, GENE.RADIUS); // Use the actual gene value
+    const barWidth = crabRadius * 1.5;
+    const barHeight = 5; // Slightly thicker for visibility
+    // Position bar slightly above the crab's center for better visibility
+    const barYOffset = -crabRadius * 1.3; 
 
+    // Save context state for bar drawing
+    ctx.save();
+    // Ensure bar is drawn relative to crab center, unaffected by crab rotation
+    ctx.rotate(-crab.orientation); 
+    
+    // Background of the bar
     ctx.fillStyle = "rgba(50, 50, 50, 0.7)";
     ctx.fillRect(-barWidth / 2, barYOffset, barWidth, barHeight);
-    ctx.fillStyle = `rgb(${255 * (1 - energyRatio)}, ${255 * energyRatio}, 50)`;
+    
+    // Filled portion of the bar
+    // Color transition: Green (full) -> Yellow -> Red (empty)
+    const hue = energyRatio * 120; // 0=Red, 120=Green
+    ctx.fillStyle = `hsl(${hue}, 90%, 50%)`;
     ctx.fillRect(-barWidth / 2, barYOffset, barWidth * energyRatio, barHeight);
     
-    ctx.restore();
+    // Simple border for clarity
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-barWidth / 2, barYOffset, barWidth, barHeight);
+    
+    // Restore context state
+    ctx.restore(); 
+    // --- End Energy Bar Drawing ---
+    
+    ctx.restore(); // Restore context state for the crab's translation/rotation
   }
 }
 
@@ -1695,13 +1449,13 @@ function updateBreedButton(){
   } else if(sel === 1) {
     let crab = population.find(c => c.selected);
     if (crab) {
-      let dragMod = Utils.getFormattedGene(crab.genotype, Utils.GENE.DRAG_MOD);
-      let rotDragMod = Utils.getFormattedGene(crab.genotype, Utils.GENE.ROT_DRAG_MOD);
-      let elasticity = Utils.getFormattedGene(crab.genotype, Utils.GENE.ELASTICITY);
-      let torqueEff = Utils.getFormattedGene(crab.genotype, Utils.GENE.TORQUE_EFF);
-      let powerRatio = Utils.getFormattedGene(crab.genotype, Utils.GENE.POWER_RATIO);
+      let dragMod = Utils.getFormattedGene(crab.genotype, GENE.DRAG_MOD);
+      let rotDragMod = Utils.getFormattedGene(crab.genotype, GENE.ROT_DRAG_MOD);
+      let elasticity = Utils.getFormattedGene(crab.genotype, GENE.ELASTICITY);
+      let torqueEff = Utils.getFormattedGene(crab.genotype, GENE.TORQUE_EFF);
+      let powerRatio = Utils.getFormattedGene(crab.genotype, GENE.POWER_RATIO);
       let currentEnergy = Math.round(crab.energy);
-      let maxEnergyEstimate = CONFIG.BASE_ENERGY + Utils.getGene(crab.genotype, Utils.GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR;
+      let maxEnergyEstimate = CONFIG.BASE_ENERGY + Utils.getGene(crab.genotype, GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR;
       
       info.innerHTML = `
         <div style="font-weight:bold;margin-bottom:5px;color:#8CD5FF">Selected Crab Traits</div>
@@ -1767,25 +1521,57 @@ function updateFoodAndEating() {
       const dy = crab.y - food.y;
       const distSq = dx * dx + dy * dy;
       // Use crab's base radius gene for collision check - simple approximation
-      const collideDist = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) + CONFIG.FOOD_RADIUS;
+      const collideDist = Utils.getGene(crab.genotype, GENE.RADIUS) + CONFIG.FOOD_RADIUS;
 
       if (distSq < collideDist * collideDist) {
         crab.energy += CONFIG.FOOD_ENERGY_VALUE;
         foodPellets.splice(j, 1); // Remove food
         // Create a small eating visual effect
-        createCollisionEffect(food.x, food.y, 0.5, 1.0);
+        if (Number.isFinite(food.x) && Number.isFinite(food.y)) { // KISS: Check coords before creating effect
+            createCollisionEffect(food.x, food.y, 0.5, 1.0, {}); // Pass empty options
+        }
         break; // Crab eats one pellet per check
       }
     }
   }
 }
 
-function checkDeaths() {
+// Renamed and updated function
+function handleDeathsAndCulling() {
   for (let i = population.length - 1; i >= 0; i--) {
-    if (population[i].energy <= 0) {
-      // Create death visual effect
-      createCollisionEffect(population[i].x, population[i].y, 1.0, 0.8);
-      population.splice(i, 1); // Remove the dead crab
+    const crab = population[i];
+    if (!crab) continue; // Safety first
+    
+    let removeCrab = false;
+    let effectType = null;
+
+    // Check for death by energy
+    if (crab.energy <= 0) {
+        removeCrab = true;
+        effectType = 'death';
+    } 
+    // Check if marked for culling (ensure energy is not already zero to avoid double effect)
+    else if (crab.markedForCulling) {
+        removeCrab = true;
+        effectType = 'cull'; // Use a different effect indicator if needed
+    }
+
+    if (removeCrab) {
+      // Create appropriate visual effect (death or cull)
+      const crabX = crab.x;
+      const crabY = crab.y;
+      if (Number.isFinite(crabX) && Number.isFinite(crabY)) { 
+          if (effectType === 'death') {
+              // Use simplified call
+              createCollisionEffect(crabX, crabY, 1.0, 0.7, { type: 'death' }); 
+          } else if (effectType === 'cull') {
+              // Use simplified call (already done in triggerReproduction marking, 
+              // but we can add a final confirmation effect here if desired, 
+              // or remove this else-if block if the marking effect is sufficient)
+              createCollisionEffect(crabX, crabY, 0.8, 0.5, { type: 'cull' }); 
+          }
+      }
+      population.splice(i, 1); // Remove the crab safely
     }
   }
 }
@@ -1797,7 +1583,7 @@ function mainLoop(){
   globalTime+= CONFIG.TIME_STEP;
   updateFoodAndEating(); // Handle food spawning and eating
   updateMovement();
-  checkDeaths();        // Remove crabs with no energy
+  handleDeathsAndCulling(); // Renamed: Remove dead and culled crabs
   drawWorld();
   requestAnimationFrame(mainLoop);
 }
