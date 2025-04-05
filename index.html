@@ -209,7 +209,17 @@ const CONFIG = {
   SKITTER_FACTOR: 0.25,
   RIPPLE_EFFECT: 0.15,
   PULSE_INTERVAL: 5.0,
-  WATER_RESISTANCE: 1.2
+  WATER_RESISTANCE: 1.2,
+  
+  // Natural selection parameters
+  BASE_ENERGY: 150,          // Starting energy base
+  ENERGY_GENE_FACTOR: 8,     // Multiplier for ENERGY gene contribution
+  BASAL_METABOLISM_COST: 0.05, // Constant energy drain per time step
+  THRUST_ENERGY_COST: 0.008, // Energy cost per unit of total thrust per step
+  MAX_FOOD: 40,              // Max food pellets on screen
+  FOOD_SPAWN_RATE: 0.1,      // Chance to spawn food per frame if needed
+  FOOD_RADIUS: 5,
+  FOOD_ENERGY_VALUE: 50      // Energy gained from one food pellet
 };
 
 /***********************************************************************
@@ -217,6 +227,7 @@ const CONFIG = {
  ***********************************************************************/
 let canvas, ctx, W, H;
 let population=[];
+let foodPellets=[];
 let globalTime=0;
 
 /***********************************************************************
@@ -479,6 +490,7 @@ function getSymmetricGenotype(orig){
  ***********************************************************************/
 function initPopulation(){
   population=[];
+  foodPellets=[];
   for(let i=0;i< CONFIG.POP_SIZE;i++){
     let geno= createRandomGenotype();
     let crab = {
@@ -488,11 +500,18 @@ function initPopulation(){
       vx:0, vy:0,
       orientation: Math.random()* 2*Math.PI,
       omega:0,
-      selected:false
+      selected:false,
+      energy: CONFIG.BASE_ENERGY + Utils.getGene(geno, Utils.GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR
     };
     createCrabPattern(crab);
     population.push(crab);
   }
+  
+  // Spawn initial food
+  for(let i = 0; i < CONFIG.MAX_FOOD * 0.75; i++) { // Start with some food
+    if (foodPellets.length < CONFIG.MAX_FOOD) spawnFoodPellet();
+  }
+  
   updateBreedButton();
 }
 
@@ -645,6 +664,7 @@ function applyLimbForces(crab){
   crab._fx=0; 
   crab._fy=0;
   crab._torque=0;
+  crab._currentThrust = 0; // Reset and accumulate thrust for energy cost
 
   let rad= Utils.getGene(crab.genotype, Utils.GENE.RADIUS);
   crab._inertia= 1 + CONFIG.INERTIA_FACTOR * (rad * rad);
@@ -695,6 +715,7 @@ function applyLimbForces(crab){
 
     crab._fx+= fx; 
     crab._fy+= fy;
+    crab._currentThrust += thrust; // Accumulate thrust for this step
 
     let offR= rad * (0.6 + 0.4 * Math.abs(Math.sin(bAng)));
     let offX= offR* Math.cos(crab.orientation+ bAng);
@@ -994,6 +1015,11 @@ function integrateCrab(crab){
   crab.y+= crab.vy* dt;
   crab.orientation+= crab.omega* dt;
   crab.orientation = crab.orientation % (2 * Math.PI);
+  
+  // Apply energy costs
+  const cost = (CONFIG.BASAL_METABOLISM_COST + (crab._currentThrust * CONFIG.THRUST_ENERGY_COST)) * dt;
+  crab.energy -= cost;
+  crab._currentThrust = 0; // Reset for next frame
 }
 
 function handleWallCollision(crab){
@@ -1362,6 +1388,18 @@ function drawWorld(){
   drawNebulaBackground();
   drawGravityCenter();
   
+  // Draw food pellets
+  ctx.save();
+  ctx.fillStyle = "rgba(100, 255, 100, 0.85)";
+  ctx.shadowColor = "rgba(180, 255, 180, 0.6)";
+  ctx.shadowBlur = 5;
+  for (const food of foodPellets) {
+    ctx.beginPath();
+    ctx.arc(food.x, food.y, CONFIG.FOOD_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  
   updateCollisionEffects();
   
   for(let crab of population){
@@ -1409,6 +1447,18 @@ function drawWorld(){
     }
     
     drawCrab(ctx, drawG, globalTime, crab.x, crab.y);
+    
+    // Draw energy bar
+    const energyRatio = Utils.clamp(crab.energy / (CONFIG.BASE_ENERGY + 10 * CONFIG.ENERGY_GENE_FACTOR), 0, 1);
+    const barWidth = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) * 1.5;
+    const barHeight = 4;
+    const barYOffset = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) * 0.2; // Position bar inside body
+
+    ctx.fillStyle = "rgba(50, 50, 50, 0.7)";
+    ctx.fillRect(-barWidth / 2, barYOffset, barWidth, barHeight);
+    ctx.fillStyle = `rgb(${255 * (1 - energyRatio)}, ${255 * energyRatio}, 50)`;
+    ctx.fillRect(-barWidth / 2, barYOffset, barWidth * energyRatio, barHeight);
+    
     ctx.restore();
   }
 }
@@ -1650,6 +1700,8 @@ function updateBreedButton(){
       let elasticity = Utils.getFormattedGene(crab.genotype, Utils.GENE.ELASTICITY);
       let torqueEff = Utils.getFormattedGene(crab.genotype, Utils.GENE.TORQUE_EFF);
       let powerRatio = Utils.getFormattedGene(crab.genotype, Utils.GENE.POWER_RATIO);
+      let currentEnergy = Math.round(crab.energy);
+      let maxEnergyEstimate = CONFIG.BASE_ENERGY + Utils.getGene(crab.genotype, Utils.GENE.ENERGY, 0) * CONFIG.ENERGY_GENE_FACTOR;
       
       info.innerHTML = `
         <div style="font-weight:bold;margin-bottom:5px;color:#8CD5FF">Selected Crab Traits</div>
@@ -1668,6 +1720,9 @@ function updateBreedButton(){
           
           <div>Power:</div> 
           <div style="color:${powerRatio > 1.2 ? '#ff8ee3' : '#8effba'}">${powerRatio > 1.2 ? 'Strong' : 'Balanced'} (${powerRatio})</div>
+          
+          <div>Energy:</div>
+          <div style="color:${currentEnergy > CONFIG.BASE_ENERGY * 0.5 ? '#9fff8e' : '#ffaa8e'}">${currentEnergy} / ~${Math.round(maxEnergyEstimate)}</div>
         </div>
         <div style="font-size:0.8em;margin-top:5px;opacity:0.8">Select one more crab to breed</div>
       `;
@@ -1682,7 +1737,56 @@ function updateBreedButton(){
   } else {
     btn.style.display = "none";
     if (btn.style.animation) btn.style.animation = "none";
-    info.textContent = "Click crabs to select (min 2 to breed)";
+    info.textContent = "Click crabs to select (min 2 to breed)" + (population.length < CONFIG.POP_SIZE ? ` - ${population.length} alive` : "");
+  }
+}
+
+function spawnFoodPellet() {
+  if (foodPellets.length < CONFIG.MAX_FOOD) {
+     foodPellets.push({
+        x: Utils.rand(CONFIG.FOOD_RADIUS, W - CONFIG.FOOD_RADIUS),
+        y: Utils.rand(CONFIG.FOOD_RADIUS, H - CONFIG.FOOD_RADIUS)
+     });
+  }
+}
+
+function updateFoodAndEating() {
+  // Spawn new food?
+  if (foodPellets.length < CONFIG.MAX_FOOD && Math.random() < CONFIG.FOOD_SPAWN_RATE) {
+    spawnFoodPellet();
+  }
+
+  // Check for eating
+  for (let i = population.length - 1; i >= 0; i--) {
+    const crab = population[i];
+    if (!crab) continue; // Safety check if crab was removed mid-loop elsewhere
+
+    for (let j = foodPellets.length - 1; j >= 0; j--) {
+      const food = foodPellets[j];
+      const dx = crab.x - food.x;
+      const dy = crab.y - food.y;
+      const distSq = dx * dx + dy * dy;
+      // Use crab's base radius gene for collision check - simple approximation
+      const collideDist = Utils.getGene(crab.genotype, Utils.GENE.RADIUS) + CONFIG.FOOD_RADIUS;
+
+      if (distSq < collideDist * collideDist) {
+        crab.energy += CONFIG.FOOD_ENERGY_VALUE;
+        foodPellets.splice(j, 1); // Remove food
+        // Create a small eating visual effect
+        createCollisionEffect(food.x, food.y, 0.5, 1.0);
+        break; // Crab eats one pellet per check
+      }
+    }
+  }
+}
+
+function checkDeaths() {
+  for (let i = population.length - 1; i >= 0; i--) {
+    if (population[i].energy <= 0) {
+      // Create death visual effect
+      createCollisionEffect(population[i].x, population[i].y, 1.0, 0.8);
+      population.splice(i, 1); // Remove the dead crab
+    }
   }
 }
 
@@ -1691,7 +1795,9 @@ function updateBreedButton(){
  ***********************************************************************/
 function mainLoop(){
   globalTime+= CONFIG.TIME_STEP;
+  updateFoodAndEating(); // Handle food spawning and eating
   updateMovement();
+  checkDeaths();        // Remove crabs with no energy
   drawWorld();
   requestAnimationFrame(mainLoop);
 }
