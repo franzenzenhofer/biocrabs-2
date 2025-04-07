@@ -106,11 +106,12 @@ function handleTap(e) {
 
     // Find the crab that was clicked (if any)
     for (const crab of populationRef) {
-        const radius = utilGetGene(crab.genotype, geneRef.RADIUS);
+        const visualRadius = utilGetGene(crab.genotype, geneRef.RADIUS);
+        const selectionRadius = visualRadius * 1.5; // Increase clickable radius by 50%
         const dx = x - crab.x;
         const dy = y - crab.y;
 
-        if (dx * dx + dy * dy <= radius * radius) {
+        if (dx * dx + dy * dy <= selectionRadius * selectionRadius) { // Use selectionRadius here
             clickedCrab = crab;
             break;
         }

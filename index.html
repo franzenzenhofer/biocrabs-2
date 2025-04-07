@@ -86,7 +86,7 @@ import {
  * CONFIG
  ***********************************************************************/
 const CONFIG = {
-  POP_SIZE: 10,
+  POP_SIZE: 8,
   LIMB_COUNT: 8,
   BRANCH_DEPTH: 2,
   MUTATION_RATE: 0.1,
@@ -186,7 +186,7 @@ window.addEventListener('load', () => {
     console.log("Desktop configuration activated.");
     // Override values for desktop screens
     CONFIG.TARGET_SYSTEM_ENERGY = 2000;  // Higher target for larger screens
-    CONFIG.POP_SIZE = 12;                // Larger initial population
+    CONFIG.POP_SIZE = 10;                // Larger initial population
     CONFIG.FOOD_SPAWN_RATE = 0.12;       // Slightly faster spawn rate for larger area
 
     // Adjust initial environment energy AND the wrapper to match the new target
