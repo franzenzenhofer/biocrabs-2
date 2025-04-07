@@ -1,0 +1,12 @@
+{
+  "name": "biocrabs",
+  "version": "1.0.0",
+  "description": "BioCrabs Simulation",
+  "main": "index.html",
+  "scripts": {
+    "deploy": "npx wrangler pages deploy . --project-name biocrabs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+} 

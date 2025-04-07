@@ -1,0 +1,13 @@
+# wrangler.toml - Configuration for Cloudflare Pages
+name            = "biocrabs"                     # Optional: Project name can also be specified in the command
+
+compatibility_date = "2025-04-07"                # Keep for potential future use
+pages_build_output_dir = "."                  # Specify the directory to upload
+
+# Remove Worker Site specific settings:
+# main = "workers-site/index.js"
+# routes = [
+#     { pattern = "biocrabs.franzai.com/*", zone_name = "franzai.com" }
+# ]
+# [site]
+# bucket = "." 

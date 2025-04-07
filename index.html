@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>BioCrabs: Interactive Aquatic Life Simulation with Evolving Creatures</title>
   <link rel="stylesheet" href="styles.css">
+  <!-- Add Hammer.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script> 
 </head>
 <body>
 
@@ -62,7 +64,9 @@ import {
   triggerReproduction
 } from './reproduction.js';
 
-import { updateInfoPanel, onCanvasClick, initUI } from './ui.js';
+import {
+  updateInfoPanel, initUI
+} from './ui.js';
 
 /***********************************************************************
  * CONFIG
@@ -110,6 +114,7 @@ const CONFIG = {
   FOOD_RADIUS: 5,
   FOOD_ENERGY_VALUE: 20,       // Energy gained from eating food
   REPRO_ENERGY_THRESHOLD: 60,  // Minimum energy needed to reproduce
+  COLLISION_ENERGY_COST_FACTOR: 0.05, // Factor to determine energy lost on non-reproductive collision based on impact
 
   // --- Target Energy for Stabilization ---
   TARGET_SYSTEM_ENERGY: 1000,  // Target total energy for the system
@@ -125,6 +130,10 @@ let population = [];
 let foodPellets = [];
 let globalTime = 0;
 let environmentEnergy = 1000; // Initial environment energy pool (Decreased)
+// Define the wrapper *immediately* after the primitive it wraps
+const environmentEnergyWrapper = { value: environmentEnergy };
+// Add state for deferred crab creation
+let crabCreationRequest = null; // Will store { x, y } if requested
 
 const GENE = {
   RADIUS: 0,
@@ -162,23 +171,36 @@ window.addEventListener('load', () => {
   if (isDesktop) {
     console.log("Desktop configuration activated.");
     // Override values for desktop screens
-    CONFIG.TARGET_SYSTEM_ENERGY = 4000;  // Higher target for larger screens
+    CONFIG.TARGET_SYSTEM_ENERGY = 2000;  // Higher target for larger screens
     CONFIG.POP_SIZE = 12;                // Larger initial population
     CONFIG.FOOD_SPAWN_RATE = 0.12;       // Slightly faster spawn rate for larger area
 
-    // Adjust initial environment energy to match the new target
+    // Adjust initial environment energy AND the wrapper to match the new target
     environmentEnergy = CONFIG.TARGET_SYSTEM_ENERGY;
+    environmentEnergyWrapper.value = environmentEnergy; // Sync wrapper
   } else {
     console.log("Mobile configuration activated.");
     // Using default values already defined
+    // Sync wrapper with initial value
+    environmentEnergyWrapper.value = environmentEnergy; 
   }
   // --- SCREEN SIZE DEPENDENT CONFIGURATION --- END
 
-  canvas.addEventListener('click', onCanvasClick);
+  // Define the wrapper *before* it's needed by initPopulation
+  // const environmentEnergyWrapper = { value: environmentEnergy }; // MOVED TO GLOBALS
 
   initPopulation();
+
   // Initialize UI module with necessary references
-  initUI(canvas, population, CONFIG, getGene, getFormattedGene, GENE);
+  // Pass environmentEnergy as an object to allow modification by ui.js
+  // const environmentEnergyWrapper = { value: environmentEnergy }; // Moved earlier
+  // Pass any needed global update functions
+  const globalUpdateFunctions = {
+      requestCrabCreation // Pass the function itself
+  };
+  initUI(canvas, population, CONFIG, GENE, environmentEnergyWrapper, globalUpdateFunctions);
+
+  // Start the main loop
   requestAnimationFrame(mainLoop);
 });
 
@@ -205,12 +227,13 @@ function initPopulation() {
     applyMovementSymmetry(geno, CONFIG, GENE);
 
     // --- Initial Crab Energy Deduction ---
-    if (environmentEnergy >= CONFIG.BASE_ENERGY) {
-      environmentEnergy -= CONFIG.BASE_ENERGY;
+    // Use the wrapper object now
+    if (environmentEnergyWrapper.value >= CONFIG.BASE_ENERGY) {
+      environmentEnergyWrapper.value -= CONFIG.BASE_ENERGY;
     } else {
-      console.warn(`Not enough environment energy (${environmentEnergy}) to spawn crab ${i} with required ${CONFIG.BASE_ENERGY}. Spawning with reduced energy.`);
-      CONFIG.BASE_ENERGY = environmentEnergy; // Assign remaining energy
-      environmentEnergy = 0;
+      console.warn(`Not enough environment energy (${environmentEnergyWrapper.value}) to spawn crab ${i} with required ${CONFIG.BASE_ENERGY}. Spawning with reduced energy.`);
+      CONFIG.BASE_ENERGY = environmentEnergyWrapper.value; // Assign remaining energy
+      environmentEnergyWrapper.value = 0;
     }
     // ------------------------------------
 
@@ -472,16 +495,18 @@ function handleCrabCollision(A, B, offspringAccumulator) {
     const rvx = B.vx - A.vx;
     const rvy = B.vy - A.vy;
     const approach = rvx * nx + rvy * ny;
+    let j = 0; // Declare j outside the block, initialize to 0
+
     if (approach < 0) {
       const elasticityA = getCachedGene(A, GENE.ELASTICITY);
       const elasticityB = getCachedGene(B, GENE.ELASTICITY);
       const avgElasticity = (elasticityA + elasticityB) / 2;
       const e = CONFIG.RESTITUTION * avgElasticity;
-      let j = -(1 + e) * approach * 0.5;
+      j = -(1 + e) * approach * 0.5; // Assign value to j declared outside
 
-      // Slightly clamp j to avoid wild values
+      // Slightly clamp j for visual effect intensity, but use raw j for physics
       const maxEffectIntensity = 50.0;
-      const clampedJ = Math.min(j, maxEffectIntensity); // only for visual effect
+      const clampedJ = Math.min(Math.abs(j), maxEffectIntensity);
 
       const impx = j * nx;
       const impy = j * ny;
@@ -522,11 +547,12 @@ function handleCrabCollision(A, B, offspringAccumulator) {
     B.x += push * nx;
     B.y += push * ny;
 
-    // Reproduction check
+    // Reproduction Check OR Collision Cost Application
     if (
       A.energy >= CONFIG.REPRO_ENERGY_THRESHOLD &&
       B.energy >= CONFIG.REPRO_ENERGY_THRESHOLD
     ) {
+      // --- Reproductive Collision --- 
       const reproResult = triggerReproduction(
         A,
         B,
@@ -543,6 +569,23 @@ function handleCrabCollision(A, B, offspringAccumulator) {
           createCollisionEffect((A.x + B.x) / 2, (A.y + B.y) / 2, 5, 1.0, { color: 'rgba(255, 180, 255, 0.7)' });
       }
       // Culling set from reproResult is ignored now.
+    } else {
+      // --- Non-Reproductive Collision --- Apply Energy Cost --- 
+      // Apply cost only if there was an actual collision impulse (approach < 0)
+      // 'j' will be non-zero only if the above block executed
+      if (approach < 0) { 
+        const collisionIntensity = Math.abs(j);
+        // Cap the intensity contributing to cost to avoid huge penalties from extreme physics glitches
+        const maxCostIntensity = 2.0; 
+        const clampedIntensity = Math.min(collisionIntensity, maxCostIntensity);
+        const cost = CONFIG.COLLISION_ENERGY_COST_FACTOR * clampedIntensity;
+
+        // Deduct cost, ensuring energy doesn't go below 0
+        if (cost > 0) {
+            A.energy = Math.max(0, A.energy - cost);
+            B.energy = Math.max(0, B.energy - cost);
+        }
+      }
     }
   }
 }
@@ -663,7 +706,8 @@ function integrateCrab(crab) {
     (CONFIG.BASAL_METABOLISM_COST + crab._currentThrust * CONFIG.THRUST_ENERGY_COST) *
     dt;
   crab.energy -= cost;
-  environmentEnergy += cost; // Add metabolic cost back to environment
+  // Use the wrapper object here too
+  environmentEnergyWrapper.value += cost; // Add metabolic cost back to environment
   crab._currentThrust = 0;
 }
 
@@ -728,8 +772,8 @@ function handleWallCollision(crab) {
  * Spawn a food pellet, potentially near crabs when population is low.
  */
 function spawnFoodPellet(energyValue, maxFoodOverride, nearCrabs = false) {
-  // Check if enough environment energy exists
-  if (environmentEnergy < energyValue) {
+  // Check if enough environment energy exists - use wrapper
+  if (environmentEnergyWrapper.value < energyValue) {
     return false; // Cannot spawn food, return false
   }
   
@@ -742,7 +786,8 @@ function spawnFoodPellet(energyValue, maxFoodOverride, nearCrabs = false) {
   
   // Check if we're below the cap
   if (foodPellets.length < maxFood) { 
-    environmentEnergy -= energyValue; // Consume energy from environment
+    // Consume energy from environment - use wrapper
+    environmentEnergyWrapper.value -= energyValue;
 
     // --- New "Spawn Near Crabs" Logic ---
     let x, y;
@@ -781,10 +826,13 @@ function spawnFoodPellet(energyValue, maxFoodOverride, nearCrabs = false) {
 }
 
 function updateFoodAndEating() {
-    // --- Calculate Current Total System Energy ---
+    // --- Calculate Current Total System Energy --- Use wrapper
     const totalCrabEnergy = population.reduce((sum, c) => sum + (c && typeof c.energy === 'number' && !isNaN(c.energy) ? c.energy : 0), 0);
     const totalPelletEnergy = foodPellets.reduce((sum, f) => sum + (f && typeof f.energyValue === 'number' ? f.energyValue : 0), 0);
-    const safeEnvironmentEnergy = (typeof environmentEnergy === 'number' && !isNaN(environmentEnergy)) ? environmentEnergy : 0;
+    // Use wrapper and ensure it's valid
+    const safeEnvironmentEnergy = (environmentEnergyWrapper && typeof environmentEnergyWrapper.value === 'number' && !isNaN(environmentEnergyWrapper.value)) 
+                                ? environmentEnergyWrapper.value 
+                                : 0;
     const currentTotalSystemEnergy = totalCrabEnergy + totalPelletEnergy + safeEnvironmentEnergy;
 
     // --- Dynamic Food Cap Calculation ---
@@ -800,7 +848,7 @@ function updateFoodAndEating() {
     // Higher chance of targeted food with fewer crabs
     const targetedFoodChance = isLowPopulation ? (1 - population.length / 5) * 0.9 : 0;
     
-    // --- Safeguard Logic ---
+    // --- Safeguard Logic --- Use wrapper
     const lowerThreshold = targetEnergy * 0.95;
     const upperThreshold = targetEnergy * 1.05;
     const foodEnergyValue = CONFIG.FOOD_ENERGY_VALUE;
@@ -817,7 +865,7 @@ function updateFoodAndEating() {
             if (foodPellets.length >= emergencyMaxFood) {
                 break;
             }
-
+            // Use wrapper for check
             if (safeEnvironmentEnergy >= foodEnergyValue) {
                 // Environment has energy - use normal spawn
                 // For low population, force near-crab spawning for emergency pellets
@@ -870,24 +918,48 @@ function updateFoodAndEating() {
         spawnFoodPellet(foodEnergyValue, dynamicMaxFood, spawnNearCrabs);
     }
 
-    // --- Eating Logic ---
+    // --- Eating Logic --- Use AABB optimization
+    const foodRadius = CONFIG.FOOD_RADIUS;
     for (let i = population.length - 1; i >= 0; i--) {
         const crab = population[i];
         if (!crab || typeof crab.energy !== 'number' || isNaN(crab.energy)) continue;
+        const crabRadius = getCachedGene(crab, GENE.RADIUS);
+        const collideDist = crabRadius + foodRadius;
+        const collideDistSq = collideDist * collideDist;
+
+        // Crab Bounding Box (add a small buffer if needed)
+        const crabLeft = crab.x - crabRadius;
+        const crabRight = crab.x + crabRadius;
+        const crabTop = crab.y - crabRadius;
+        const crabBottom = crab.y + crabRadius;
+
         for (let j = foodPellets.length - 1; j >= 0; j--) {
             const food = foodPellets[j];
             if (!food || typeof food.energyValue !== 'number' || isNaN(food.energyValue)) continue;
 
+            // --- Broad Phase: AABB Check --- 
+            // Check if bounding boxes *don't* overlap first (faster exit)
+            if (
+                crabRight < food.x - foodRadius || // Crab is fully left of food
+                crabLeft > food.x + foodRadius ||  // Crab is fully right of food
+                crabBottom < food.y - foodRadius || // Crab is fully above food
+                crabTop > food.y + foodRadius     // Crab is fully below food
+            ) {
+                continue; // No collision possible, skip to next food pellet
+            }
+
+            // --- Narrow Phase: Circle Collision Check ---
+            // (Only runs if AABB check passed)
             const dx = crab.x - food.x;
             const dy = crab.y - food.y;
             const distSq = dx * dx + dy * dy;
-            const collideDist = getCachedGene(crab, GENE.RADIUS) + CONFIG.FOOD_RADIUS;
-            if (distSq < collideDist * collideDist) {
+            
+            if (distSq < collideDistSq) {
                 // Transfer energy from pellet to crab
                 crab.energy += food.energyValue;
                 crab.energy = Math.min(crab.energy, CONFIG.MAX_ENERGY);
-                foodPellets.splice(j, 1);
-                break;
+                foodPellets.splice(j, 1); // Remove eaten food
+                break; // Crab ate, move to next crab
             }
         }
     }
@@ -905,9 +977,14 @@ function handleDeathsAndCulling() {
 
     // Only check for death by starvation
     if (crab.energy <= 0) {
-      // --- Trigger Death Effect Here ---
+      // --- Trigger Death Effect Here --- Use wrapper
       // Reclaim the crab's energy back to the environment, ensuring it's not negative.
-      environmentEnergy += Math.max(0, crab.energy); // Add only positive or zero energy
+      // Ensure wrapper exists and has a numeric value before adding
+      if (environmentEnergyWrapper && typeof environmentEnergyWrapper.value === 'number') {
+           environmentEnergyWrapper.value += Math.max(0, crab.energy); // Add only positive or zero energy
+      } else {
+          console.error("EnvironmentEnergyWrapper invalid during energy reclaim!");
+      }
       createDeathEffect(crab, GENE, getGene); // Call before removing, pass dependencies
       // ---------------------------------
       population.splice(i, 1); // Remove the crab
@@ -921,6 +998,42 @@ function handleDeathsAndCulling() {
  ***********************************************************************/
 function mainLoop() {
   globalTime += CONFIG.TIME_STEP;
+
+  // --- Handle Deferred Crab Creation --- START
+  if (crabCreationRequest) {
+    const { x, y } = crabCreationRequest;
+    console.log(`Processing crab creation request at (${x.toFixed(0)}, ${y.toFixed(0)})`);
+
+    const energyCost = CONFIG.BASE_ENERGY;
+    // Environment energy check completely removed
+
+    // Create the crab
+    const geno = createRandomGenotype(CONFIG, GENE);
+    applyBodySymmetry(geno, CONFIG, GENE);
+    applyMovementSymmetry(geno, CONFIG, GENE);
+
+    const newCrab = {
+        genotype: geno,
+        x: clamp(x + rand(-5, 5), 0, W),
+        y: clamp(y + rand(-5, 5), 0, H),
+        vx: 0, vy: 0,
+        orientation: Math.random() * 2 * Math.PI,
+        omega: 0,
+        selected: false,
+        energy: energyCost, // Crab starts with base energy
+        markedForCulling: false,
+        _fx: 0, _fy: 0, _torque: 0, _inertia: 1, _currentThrust: 0,
+        _geneCache: {}
+    };
+
+    population.push(newCrab);
+    createBirthEffect(newCrab.x, newCrab.y, getGene(geno, GENE.RADIUS)); // Use getGene
+    console.log("Crab created successfully via double tap.");
+
+    // Clear the request
+    crabCreationRequest = null;
+  }
+  // --- Handle Deferred Crab Creation --- END
 
   // Clear canvas
   ctx.clearRect(0, 0, W, H);
@@ -936,11 +1049,14 @@ function mainLoop() {
   updateCollisionEffects(ctx, CONFIG.TIME_STEP);
   updateLifeCycleEffects(ctx, CONFIG.TIME_STEP, GENE, getGene, getPolyVerts);
 
-  // --- Energy Stats Logging ---
+  // --- Energy Stats Logging --- Use wrapper
   if (Math.random() < 0.02) { // Log every ~50 frames
     const totalCrabEnergy = population.reduce((sum, c) => sum + (c && typeof c.energy === 'number' ? c.energy : 0), 0);
     const totalPelletEnergy = foodPellets.reduce((sum, f) => sum + (f && typeof f.energyValue === 'number' ? f.energyValue : 0), 0);
-    const safeEnvEnergy = (typeof environmentEnergy === 'number' && !isNaN(environmentEnergy)) ? environmentEnergy : 0;
+    // Use wrapper safely
+    const safeEnvEnergy = (environmentEnergyWrapper && typeof environmentEnergyWrapper.value === 'number' && !isNaN(environmentEnergyWrapper.value)) 
+                        ? environmentEnergyWrapper.value 
+                        : 0;
     const totalSystemEnergy = totalCrabEnergy + totalPelletEnergy + safeEnvEnergy;
     
     // Calculate dynamic food cap
@@ -962,6 +1078,13 @@ function mainLoop() {
   }
 
   requestAnimationFrame(mainLoop);
+}
+
+// Function for ui.js to call to request creation
+function requestCrabCreation(x, y) {
+    if (!crabCreationRequest) { // Only store one request at a time
+        crabCreationRequest = { x, y };
+    }
 }
 
 </script>
