@@ -8,7 +8,6 @@ let populationRef = null;
 let configRef = null;
 let getGeneFn = null; // Still needed if external calls expect it
 let geneRef = null;
-let environmentEnergyRef = null; // Ref to wrapper object { value: number }
 let globalUpdateFunctionsRef = null; // Ref to main loop's update functions if needed
 let requestCrabCreationFn = null; // Function passed from index.html to request creation
 
@@ -16,12 +15,11 @@ let initialHideTimeout = null;
 let hammerInstance = null; // Hammer.js instance
 
 // Initialization function - Needs more refs now
-export function initUI(canvas, population, config, geneEnum, environmentEnergyWrapper, globalUpdateFunctions) {
+export function initUI(canvas, population, config, geneEnum, globalUpdateFunctions) {
     canvasRef = canvas;
     populationRef = population;
     configRef = config;
     geneRef = geneEnum;
-    environmentEnergyRef = environmentEnergyWrapper; // Store ref to the wrapper
     globalUpdateFunctionsRef = globalUpdateFunctions; // Store ref
     requestCrabCreationFn = globalUpdateFunctions.requestCrabCreation; // Store the request function from globalUpdateFunctions (or similar structure)
 
@@ -339,7 +337,7 @@ export function updateInfoPanel() {
 // --- Button Action Functions ---
 
 function cloneCrab(originalCrab) {
-    if (!originalCrab || !populationRef || !configRef || !geneRef || !canvasRef || !environmentEnergyRef) return;
+    if (!originalCrab || !populationRef || !configRef || !geneRef || !canvasRef) return;
 
     console.log("Cloning crab:", originalCrab);
 
